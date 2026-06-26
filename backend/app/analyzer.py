@@ -54,11 +54,11 @@ def _hough_detect(
 
 
 def _make_roi(
-    w: int, h: int, center_x: int, half_width: int
+    w: int, h: int, center_x: int, half_width: int, top_fraction: float = 1 / 3
 ) -> tuple[int, int, int, int]:
     x1 = max(0, center_x - half_width)
     x2 = min(w, center_x + half_width)
-    y1 = h // 3   # bottom two-thirds only
+    y1 = int(h * top_fraction)
     y2 = h
     return (x1, y1, x2, y2)
 
@@ -76,11 +76,16 @@ def detect_ball_in_frame(
     h, w = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
+    min_r = max(10, w // 50)
+    max_r = max(min_r + 20, w // 12)
+
     roi = None
     if center_x is not None and search_half_width:
-        roi = _make_roi(w, h, center_x, search_half_width)
+        roi = _make_roi(w, h, center_x, search_half_width, top_fraction=0)
 
-    best = _hough_detect(gray, min_r=60, max_r=150, param2=25, roi=roi)
+    best = _hough_detect(gray, min_r, max_r, param2=25, roi=roi)
+    if best is None and roi is not None:
+        best = _hough_detect(gray, min_r, max_r, param2=20)
     if best is None:
         return {"x": None, "y": None, "r": None}
     return {"x": int(best[0]), "y": int(best[1]), "r": int(best[2])}
@@ -107,7 +112,8 @@ def analyze_putt(
         min_r = max(5, ball_radius_hint - 10)
         max_r = ball_radius_hint + 10
     else:
-        min_r, max_r = 60, 150
+        min_r = None  # computed per-frame once dimensions are known
+        max_r = None
 
     roi: Optional[tuple[int, int, int, int]] = None
 
@@ -124,6 +130,9 @@ def analyze_putt(
         h, w = frame.shape[:2]
         if roi is None:
             roi = _make_roi(w, h, gate_center_x, gate_width_px)
+        if min_r is None:
+            min_r = max(10, w // 50)
+            max_r = max(min_r + 20, w // 12)
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         best = _hough_detect(gray, min_r, max_r, param2=15, roi=roi)
