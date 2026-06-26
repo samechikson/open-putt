@@ -116,16 +116,15 @@ def analyze_putt(
         max_r = None
 
     roi: Optional[tuple[int, int, int, int]] = None
+    tracker: Optional[cv2.Tracker] = None
+    ball_r: int = ball_radius_hint if (ball_radius_hint and ball_radius_hint > 0) else 15
+    last_y: Optional[float] = None
 
     frame_idx = 0
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-
-        if frame_idx % 10 != 0:
-            frame_idx += 1
-            continue
 
         h, w = frame.shape[:2]
         if roi is None:
@@ -134,11 +133,39 @@ def analyze_putt(
             min_r = max(10, w // 50)
             max_r = max(min_r + 20, w // 12)
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        best = _hough_detect(gray, min_r, max_r, param2=15, roi=roi)
-        if best:
-            x, y = best[0], best[1]
+        detected_pos: Optional[tuple[float, float]] = None
+
+        if tracker is not None:
+            ok, bbox = tracker.update(frame)
+            if ok:
+                cx = bbox[0] + bbox[2] / 2.0
+                cy = bbox[1] + bbox[3] / 2.0
+                if last_y is None or cy >= last_y - ball_r:
+                    detected_pos = (cx, cy)
+                else:
+                    tracker = None  # drifted upward — reset
+
+        if detected_pos is None and frame_idx % 5 == 0:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            best = _hough_detect(gray, min_r, max_r, param2=15, roi=roi)
+            if best is None:
+                best = _hough_detect(gray, min_r, max_r, param2=15)
+            if best is not None:
+                hx, hy, hr = best
+                if last_y is None or hy >= last_y - ball_r:
+                    ball_r = max(5, int(hr))
+                    bx = max(0, int(hx - hr))
+                    by = max(0, int(hy - hr))
+                    bw = min(int(2 * hr), w - bx)
+                    bh = min(int(2 * hr), h - by)
+                    tracker = cv2.TrackerCSRT_create()
+                    tracker.init(frame, (bx, by, bw, bh))
+                    detected_pos = (hx, hy)
+
+        if detected_pos is not None:
+            x, y = detected_pos
             positions.append((x, y))
+            last_y = y
             if crossing_pos is None and abs(y - gate_line_y) < 8:
                 crossing_pos = (x, y)
 
