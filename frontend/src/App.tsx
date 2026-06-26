@@ -29,9 +29,17 @@ const DEFAULT_CAL: CalibrationValues = {
 function App() {
   const [file, setFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  const [videoDims, setVideoDims] = useState<{ w: number; h: number } | null>(null);
-  const [ballCircle, setBallCircle] = useState<{ x: number; y: number; r: number } | null>(null);
-  const [detectStatus, setDetectStatus] = useState<"idle" | "detecting" | "found" | "not-found">("idle");
+  const [videoDims, setVideoDims] = useState<{ w: number; h: number } | null>(
+    null,
+  );
+  const [ballCircle, setBallCircle] = useState<{
+    x: number;
+    y: number;
+    r: number;
+  } | null>(null);
+  const [detectStatus, setDetectStatus] = useState<
+    "idle" | "detecting" | "found" | "not-found"
+  >("idle");
   const [ballPath, setBallPath] = useState<[number, number][]>([]);
   const [crossingPos, setCrossingPos] = useState<[number, number] | null>(null);
   const [cal, setCal] = useState<CalibrationValues>(DEFAULT_CAL);
@@ -97,26 +105,20 @@ function App() {
 
     if (ballPath.length > 1) {
       const n = ballPath.length;
+      ctx.strokeStyle = "rgba(255, 20, 20, 1)";
+      ctx.lineWidth = 3;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      const [x0, y0] = ballPath[0];
+      ctx.moveTo(x0 * scaleX, y0 * scaleY);
       for (let i = 1; i < n; i++) {
-        const t = i / (n - 1);
-        const [x0, y0] = ballPath[i - 1];
         const [x1, y1] = ballPath[i];
-        ctx.strokeStyle = `rgba(255,255,255,${0.15 + t * 0.55})`;
-        ctx.lineWidth = 2;
-        ctx.setLineDash([]);
-        ctx.beginPath();
-        ctx.moveTo(x0 * scaleX, y0 * scaleY);
         ctx.lineTo(x1 * scaleX, y1 * scaleY);
-        ctx.stroke();
       }
+      ctx.stroke();
       for (let i = 0; i < n; i++) {
-        const t = i / Math.max(n - 1, 1);
         const [x, y] = ballPath[i];
-        const r = Math.round(80 + t * 175);
-        const g = Math.round(140 + t * 115);
-        const b = 255;
-        const a = 0.3 + t * 0.5;
-        ctx.fillStyle = `rgba(${r},${g},${b},${a})`;
+        ctx.fillStyle = "rgba(255, 20, 20, 0.85)";
         ctx.beginPath();
         ctx.arc(x * scaleX, y * scaleY, 4, 0, Math.PI * 2);
         ctx.fill();
@@ -166,37 +168,54 @@ function App() {
     drawCalibration();
   }, [drawCalibration]);
 
-  const detectBallInFirstFrame = useCallback(async (video: HTMLVideoElement, w: number, h: number) => {
-    setDetectStatus("detecting");
-    await new Promise<void>((resolve) => {
-      const onSeeked = () => { video.removeEventListener("seeked", onSeeked); resolve(); };
-      video.addEventListener("seeked", onSeeked);
-      video.currentTime = 0;
-    });
-    const offscreen = document.createElement("canvas");
-    offscreen.width = w;
-    offscreen.height = h;
-    offscreen.getContext("2d")!.drawImage(video, 0, 0, w, h);
-    const blob = await new Promise<Blob | null>((res) => offscreen.toBlob(res, "image/jpeg", 0.92));
-    if (!blob) { setDetectStatus("not-found"); return; }
-    const fd = new FormData();
-    fd.append("frame", blob, "frame.jpg");
-    fd.append("center_x", String(Math.round(w / 2)));
-    fd.append("gate_width_px", String(Math.round(w * 0.2)));
-    try {
-      const res = await fetch("http://localhost:8000/detect-ball", { method: "POST", body: fd });
-      if (!res.ok) { setDetectStatus("not-found"); return; }
-      const data = await res.json();
-      if (data.x !== null) {
-        setBallCircle({ x: data.x, y: data.y, r: data.r });
-        setDetectStatus("found");
-      } else {
+  const detectBallInFirstFrame = useCallback(
+    async (video: HTMLVideoElement, w: number, h: number) => {
+      setDetectStatus("detecting");
+      await new Promise<void>((resolve) => {
+        const onSeeked = () => {
+          video.removeEventListener("seeked", onSeeked);
+          resolve();
+        };
+        video.addEventListener("seeked", onSeeked);
+        video.currentTime = 0;
+      });
+      const offscreen = document.createElement("canvas");
+      offscreen.width = w;
+      offscreen.height = h;
+      offscreen.getContext("2d")!.drawImage(video, 0, 0, w, h);
+      const blob = await new Promise<Blob | null>((res) =>
+        offscreen.toBlob(res, "image/jpeg", 0.92),
+      );
+      if (!blob) {
+        setDetectStatus("not-found");
+        return;
+      }
+      const fd = new FormData();
+      fd.append("frame", blob, "frame.jpg");
+      fd.append("center_x", String(Math.round(w / 2)));
+      fd.append("gate_width_px", String(Math.round(w * 0.2)));
+      try {
+        const res = await fetch("http://localhost:8000/detect-ball", {
+          method: "POST",
+          body: fd,
+        });
+        if (!res.ok) {
+          setDetectStatus("not-found");
+          return;
+        }
+        const data = await res.json();
+        if (data.x !== null) {
+          setBallCircle({ x: data.x, y: data.y, r: data.r });
+          setDetectStatus("found");
+        } else {
+          setDetectStatus("not-found");
+        }
+      } catch {
         setDetectStatus("not-found");
       }
-    } catch {
-      setDetectStatus("not-found");
-    }
-  }, []);
+    },
+    [],
+  );
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0] ?? null;
@@ -228,7 +247,11 @@ function App() {
     const w = video.videoWidth;
     const h = video.videoHeight;
     setVideoDims({ w, h });
-    setCal((prev) => ({ ...prev, gateCenterX: Math.round(w / 2), gateLineY: Math.round(h - 20) }));
+    setCal((prev) => ({
+      ...prev,
+      gateCenterX: Math.round(w / 2),
+      gateLineY: Math.round(h - 20),
+    }));
     syncCanvasSize();
   };
 
@@ -239,7 +262,10 @@ function App() {
   };
 
   useEffect(() => {
-    const observer = new ResizeObserver(() => { syncCanvasSize(); drawCalibration(); });
+    const observer = new ResizeObserver(() => {
+      syncCanvasSize();
+      drawCalibration();
+    });
     if (videoRef.current) observer.observe(videoRef.current);
     return () => observer.disconnect();
   }, [syncCanvasSize, drawCalibration]);
@@ -260,9 +286,16 @@ function App() {
     fd.append("gate_line_y", String(cal.gateLineY));
     fd.append("gate_width_px", String(cal.gateWidthPx));
     fd.append("gate_width_mm", String(cal.gateWidthMm));
-    if (ballCircle) fd.append("ball_radius_hint", String(ballCircle.r));
+    if (ballCircle) {
+      fd.append("ball_radius_hint", String(ballCircle.r));
+      fd.append("ball_x_hint", String(Math.round(ballCircle.x)));
+      fd.append("ball_y_hint", String(Math.round(ballCircle.y)));
+    }
     try {
-      const res = await fetch("http://localhost:8000/analyze", { method: "POST", body: fd });
+      const res = await fetch("http://localhost:8000/analyze", {
+        method: "POST",
+        body: fd,
+      });
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.detail || "Server error");
@@ -281,13 +314,16 @@ function App() {
   return (
     <div className="min-h-screen bg-[#0d0d0d] text-[#d0d0d0] px-4 py-8">
       <div className="max-w-6xl mx-auto">
-        <h1 className="text-3xl font-bold text-white mb-1">Putting Gate Analyzer</h1>
-        <p className="text-sm text-[#888] mb-6">Upload a video — get your offset measurement</p>
+        <h1 className="text-3xl font-bold text-white mb-1">
+          Putting Gate Analyzer
+        </h1>
+        <p className="text-sm text-[#888] mb-6">
+          Upload a video — get your offset measurement
+        </p>
 
         <form onSubmit={handleSubmit}>
           {/* Two-column layout on md+ screens */}
           <div className="flex flex-col md:flex-row gap-6">
-
             {/* LEFT: Video */}
             <div className="md:w-1/2 flex flex-col gap-4">
               {/* Upload */}
@@ -303,7 +339,9 @@ function App() {
                   required
                   className="block w-full bg-[#111] border border-[#444] rounded-md text-sm text-[#fff] px-3 py-2 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:bg-[#333] file:text-white file:cursor-pointer"
                 />
-                {file && <p className="text-xs text-[#888] mt-2">{file.name}</p>}
+                {file && (
+                  <p className="text-xs text-[#888] mt-2">{file.name}</p>
+                )}
               </div>
 
               {/* Video preview */}
@@ -326,7 +364,8 @@ function App() {
                   <p className={`detect-status ${detectStatus}`}>
                     {detectStatus === "detecting" && "Detecting ball…"}
                     {detectStatus === "found" && "Ball detected"}
-                    {detectStatus === "not-found" && "Ball not found — adjust HoughCircles params or check lighting"}
+                    {detectStatus === "not-found" &&
+                      "Ball not found — adjust HoughCircles params or check lighting"}
                   </p>
                 </div>
               )}
@@ -340,8 +379,8 @@ function App() {
                   2. Calibration
                 </h2>
                 <p className="text-xs text-[#888] mb-4">
-                  Adjust these values so the lines in the preview align with your physical gate.
-                  Measure once per camera position.
+                  Adjust these values so the lines in the preview align with
+                  your physical gate. Measure once per camera position.
                 </p>
                 <div className="grid grid-cols-2 gap-3">
                   {(
@@ -352,7 +391,10 @@ function App() {
                       ["gateWidthMm", "Gate width (mm)"],
                     ] as [keyof CalibrationValues, string][]
                   ).map(([key, label]) => (
-                    <label key={key} className="flex flex-col gap-1 text-sm text-[#ccc]">
+                    <label
+                      key={key}
+                      className="flex flex-col gap-1 text-sm text-[#ccc]"
+                    >
                       {label}
                       <input
                         type="number"
@@ -387,7 +429,9 @@ function App() {
                   <h2 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-2">
                     Result
                   </h2>
-                  {result.message && <p className="text-xs text-[#888] mb-2">{result.message}</p>}
+                  {result.message && (
+                    <p className="text-xs text-[#888] mb-2">{result.message}</p>
+                  )}
                   {result.pass_fail && (
                     <div className={`verdict ${result.pass_fail}`}>
                       {result.pass_fail.toUpperCase()}

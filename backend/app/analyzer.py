@@ -98,6 +98,8 @@ def analyze_putt(
     gate_width_px: int,
     gate_width_mm: float,
     ball_radius_hint: Optional[int] = None,
+    ball_x_hint: Optional[int] = None,
+    ball_y_hint: Optional[int] = None,
 ) -> dict:
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -134,6 +136,17 @@ def analyze_putt(
             max_r = max(min_r + 20, w // 12)
 
         detected_pos: Optional[tuple[float, float]] = None
+
+        # On the very first frame, seed the tracker from the known initial position
+        if frame_idx == 0 and tracker is None and ball_x_hint is not None and ball_y_hint is not None:
+            r = ball_r
+            bx = max(0, ball_x_hint - r)
+            by = max(0, ball_y_hint - r)
+            bw = min(2 * r, w - bx)
+            bh = min(2 * r, h - by)
+            tracker = cv2.TrackerCSRT_create()
+            tracker.init(frame, (bx, by, bw, bh))
+            last_y = float(ball_y_hint)
 
         if tracker is not None:
             ok, bbox = tracker.update(frame)
