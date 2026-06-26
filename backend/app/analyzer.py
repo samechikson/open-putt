@@ -158,6 +158,29 @@ def analyze_putt(
                 else:
                     tracker = None  # drifted upward — reset
 
+        # Periodic Hough correction: re-anchor the tracker every 10 frames to
+        # counteract drift caused by the ball rotating as it rolls
+        if detected_pos is not None and frame_idx % 10 == 0:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            px, py = detected_pos
+            margin = ball_r * 3
+            corr_roi = (
+                max(0, int(px - margin)), max(0, int(py - margin)),
+                min(w, int(px + margin)), min(h, int(py + margin)),
+            )
+            fix = _hough_detect(gray, min_r, max_r, param2=20, roi=corr_roi)
+            if fix is not None:
+                hx, hy, hr = fix
+                if ((hx - px) ** 2 + (hy - py) ** 2) ** 0.5 < ball_r * 2:
+                    ball_r = max(5, int(hr))
+                    bx = max(0, int(hx - ball_r))
+                    by = max(0, int(hy - ball_r))
+                    bw = min(2 * ball_r, w - bx)
+                    bh = min(2 * ball_r, h - by)
+                    tracker = cv2.TrackerCSRT_create()
+                    tracker.init(frame, (bx, by, bw, bh))
+                    detected_pos = (hx, hy)
+
         if detected_pos is None and frame_idx % 5 == 0:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             best = _hough_detect(gray, min_r, max_r, param2=15, roi=roi)
