@@ -57,7 +57,6 @@ function App() {
     const ctx = canvas.getContext("2d")!;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // --- Gate reference line (horizontal dashed yellow) ---
     ctx.strokeStyle = "rgba(255, 220, 0, 0.85)";
     ctx.lineWidth = 2;
     ctx.setLineDash([8, 4]);
@@ -66,7 +65,6 @@ function App() {
     ctx.lineTo(canvas.width, ly);
     ctx.stroke();
 
-    // --- Gate centerline (vertical solid green) ---
     ctx.strokeStyle = "rgba(0, 230, 100, 0.9)";
     ctx.lineWidth = 2;
     ctx.setLineDash([]);
@@ -75,7 +73,6 @@ function App() {
     ctx.lineTo(cx, canvas.height);
     ctx.stroke();
 
-    // --- Gate width bracket (blue) ---
     ctx.strokeStyle = "rgba(0, 180, 255, 0.85)";
     ctx.lineWidth = 2;
     ctx.setLineDash([]);
@@ -92,18 +89,14 @@ function App() {
     ctx.lineTo(cx + halfGate, ly);
     ctx.stroke();
 
-    // --- Labels ---
     ctx.font = "bold 13px system-ui, sans-serif";
     ctx.fillStyle = "rgba(0, 230, 100, 0.95)";
     ctx.fillText("center", cx + 6, 18);
     ctx.fillStyle = "rgba(255, 220, 0, 0.95)";
     ctx.fillText("gate line", 6, ly - 6);
 
-    // --- Ball path trail ---
     if (ballPath.length > 1) {
       const n = ballPath.length;
-
-      // Connecting line, fading from transparent to bright white
       for (let i = 1; i < n; i++) {
         const t = i / (n - 1);
         const [x0, y0] = ballPath[i - 1];
@@ -116,8 +109,6 @@ function App() {
         ctx.lineTo(x1 * scaleX, y1 * scaleY);
         ctx.stroke();
       }
-
-      // Dots at each tracked position, colour-coded early→late (blue→white)
       for (let i = 0; i < n; i++) {
         const t = i / Math.max(n - 1, 1);
         const [x, y] = ballPath[i];
@@ -132,22 +123,18 @@ function App() {
       }
     }
 
-    // --- Crossing point (where ball crossed gate line) ---
     if (crossingPos) {
       const [bx, by] = [crossingPos[0] * scaleX, crossingPos[1] * scaleY];
-      // Outer ring
       ctx.strokeStyle = "rgba(255, 80, 50, 1)";
       ctx.lineWidth = 3;
       ctx.setLineDash([]);
       ctx.beginPath();
       ctx.arc(bx, by, 14, 0, Math.PI * 2);
       ctx.stroke();
-      // Fill dot
       ctx.fillStyle = "rgba(255, 80, 50, 0.9)";
       ctx.beginPath();
       ctx.arc(bx, by, 5, 0, Math.PI * 2);
       ctx.fill();
-      // Offset line to centerline
       ctx.strokeStyle = "rgba(255, 160, 50, 0.8)";
       ctx.lineWidth = 2;
       ctx.setLineDash([4, 3]);
@@ -158,7 +145,6 @@ function App() {
       ctx.setLineDash([]);
     }
 
-    // --- First-frame ball detection circle (only shown before analysis) ---
     if (ballCircle && ballPath.length === 0) {
       const bx = ballCircle.x * scaleX;
       const by = ballCircle.y * scaleY;
@@ -182,24 +168,17 @@ function App() {
 
   const detectBallInFirstFrame = useCallback(async (video: HTMLVideoElement, w: number, h: number) => {
     setDetectStatus("detecting");
-
-    // Seek to frame 0 and wait for the browser to decode it before drawing
     await new Promise<void>((resolve) => {
-      const onSeeked = () => {
-        video.removeEventListener("seeked", onSeeked);
-        resolve();
-      };
+      const onSeeked = () => { video.removeEventListener("seeked", onSeeked); resolve(); };
       video.addEventListener("seeked", onSeeked);
       video.currentTime = 0;
     });
-
     const offscreen = document.createElement("canvas");
     offscreen.width = w;
     offscreen.height = h;
     offscreen.getContext("2d")!.drawImage(video, 0, 0, w, h);
     const blob = await new Promise<Blob | null>((res) => offscreen.toBlob(res, "image/jpeg", 0.92));
     if (!blob) { setDetectStatus("not-found"); return; }
-
     const fd = new FormData();
     fd.append("frame", blob, "frame.jpg");
     fd.append("center_x", String(Math.round(w / 2)));
@@ -243,22 +222,16 @@ function App() {
     }
   }, []);
 
-  // onLoadedMetadata: dimensions are known, set calibration defaults
   const handleVideoMetadata = () => {
     const video = videoRef.current;
     if (!video) return;
     const w = video.videoWidth;
     const h = video.videoHeight;
     setVideoDims({ w, h });
-    setCal((prev) => ({
-      ...prev,
-      gateCenterX: Math.round(w / 2),
-      gateLineY: Math.round(h - 20),
-    }));
+    setCal((prev) => ({ ...prev, gateCenterX: Math.round(w / 2), gateLineY: Math.round(h - 20) }));
     syncCanvasSize();
   };
 
-  // onLoadedData: first frame is decoded and ready to draw
   const handleVideoData = () => {
     const video = videoRef.current;
     if (!video || !video.videoWidth) return;
@@ -266,10 +239,7 @@ function App() {
   };
 
   useEffect(() => {
-    const observer = new ResizeObserver(() => {
-      syncCanvasSize();
-      drawCalibration();
-    });
+    const observer = new ResizeObserver(() => { syncCanvasSize(); drawCalibration(); });
     if (videoRef.current) observer.observe(videoRef.current);
     return () => observer.disconnect();
   }, [syncCanvasSize, drawCalibration]);
@@ -284,7 +254,6 @@ function App() {
     setLoading(true);
     setError(null);
     setResult(null);
-
     const fd = new FormData();
     fd.append("video", file);
     fd.append("gate_center_x", String(cal.gateCenterX));
@@ -292,12 +261,8 @@ function App() {
     fd.append("gate_width_px", String(cal.gateWidthPx));
     fd.append("gate_width_mm", String(cal.gateWidthMm));
     if (ballCircle) fd.append("ball_radius_hint", String(ballCircle.r));
-
     try {
-      const res = await fetch("http://localhost:8000/analyze", {
-        method: "POST",
-        body: fd,
-      });
+      const res = await fetch("http://localhost:8000/analyze", { method: "POST", body: fd });
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.detail || "Server error");
@@ -314,116 +279,139 @@ function App() {
   };
 
   return (
-    <div className="container">
-      <h1>Putting Gate Analyzer</h1>
-      <p className="subtitle">Upload a video — get your offset measurement</p>
+    <div className="min-h-screen bg-[#0d0d0d] text-[#d0d0d0] px-4 py-8">
+      <div className="max-w-6xl mx-auto">
+        <h1 className="text-3xl font-bold text-white mb-1">Putting Gate Analyzer</h1>
+        <p className="text-sm text-[#888] mb-6">Upload a video — get your offset measurement</p>
 
-      <form onSubmit={handleSubmit}>
-        <section className="card">
-          <h2>1. Upload Video</h2>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="video/*"
-            onChange={handleFileChange}
-            required
-          />
-          {file && <p className="hint">{file.name}</p>}
-        </section>
+        <form onSubmit={handleSubmit}>
+          {/* Two-column layout on md+ screens */}
+          <div className="flex flex-col md:flex-row gap-6">
 
-        {videoUrl && (
-          <section className="card">
-            <h2>Preview</h2>
-            <div className="video-wrap">
-              <video
-                ref={videoRef}
-                src={videoUrl}
-                className="preview-video"
-                controls
-                onLoadedMetadata={handleVideoMetadata}
-                onLoadedData={handleVideoData}
-              />
-              <canvas ref={canvasRef} className="cal-canvas" />
+            {/* LEFT: Video */}
+            <div className="md:w-1/2 flex flex-col gap-4">
+              {/* Upload */}
+              <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5">
+                <h2 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-3">
+                  1. Upload Video
+                </h2>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="video/*"
+                  onChange={handleFileChange}
+                  required
+                  className="block w-full bg-[#111] border border-[#444] rounded-md text-sm text-[#fff] px-3 py-2 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:bg-[#333] file:text-white file:cursor-pointer"
+                />
+                {file && <p className="text-xs text-[#888] mt-2">{file.name}</p>}
+              </div>
+
+              {/* Video preview */}
+              {videoUrl && (
+                <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5">
+                  <h2 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-3">
+                    Preview
+                  </h2>
+                  <div className="relative w-full">
+                    <video
+                      ref={videoRef}
+                      src={videoUrl}
+                      className="w-full block rounded-md bg-black"
+                      controls
+                      onLoadedMetadata={handleVideoMetadata}
+                      onLoadedData={handleVideoData}
+                    />
+                    <canvas ref={canvasRef} className="cal-canvas" />
+                  </div>
+                  <p className={`detect-status ${detectStatus}`}>
+                    {detectStatus === "detecting" && "Detecting ball…"}
+                    {detectStatus === "found" && "Ball detected"}
+                    {detectStatus === "not-found" && "Ball not found — adjust HoughCircles params or check lighting"}
+                  </p>
+                </div>
+              )}
             </div>
-            <p className={`detect-status ${detectStatus}`}>
-              {detectStatus === "detecting" && "Detecting ball…"}
-              {detectStatus === "found" && "Ball detected"}
-              {detectStatus === "not-found" && "Ball not found — adjust HoughCircles params or check lighting"}
-            </p>
-          </section>
-        )}
 
-        <section className="card">
-          <h2>2. Calibration</h2>
-          <p className="hint">
-            Adjust these values so the lines in the preview align with your physical gate.
-            Measure once per camera position.
-          </p>
-          <div className="grid-2">
-            <label>
-              Gate center X (px)
-              <input
-                type="number"
-                value={cal.gateCenterX}
-                onChange={(e) => updateCal("gateCenterX", e.target.value)}
-              />
-            </label>
-            <label>
-              Gate reference line Y (px)
-              <input
-                type="number"
-                value={cal.gateLineY}
-                onChange={(e) => updateCal("gateLineY", e.target.value)}
-              />
-            </label>
-            <label>
-              Gate width (px)
-              <input
-                type="number"
-                value={cal.gateWidthPx}
-                onChange={(e) => updateCal("gateWidthPx", e.target.value)}
-              />
-            </label>
-            <label>
-              Gate width (mm)
-              <input
-                type="number"
-                value={cal.gateWidthMm}
-                onChange={(e) => updateCal("gateWidthMm", e.target.value)}
-              />
-            </label>
+            {/* RIGHT: Controls */}
+            <div className="md:w-1/2 flex flex-col gap-4">
+              {/* Calibration */}
+              <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5">
+                <h2 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-1">
+                  2. Calibration
+                </h2>
+                <p className="text-xs text-[#888] mb-4">
+                  Adjust these values so the lines in the preview align with your physical gate.
+                  Measure once per camera position.
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  {(
+                    [
+                      ["gateCenterX", "Gate center X (px)"],
+                      ["gateLineY", "Gate reference line Y (px)"],
+                      ["gateWidthPx", "Gate width (px)"],
+                      ["gateWidthMm", "Gate width (mm)"],
+                    ] as [keyof CalibrationValues, string][]
+                  ).map(([key, label]) => (
+                    <label key={key} className="flex flex-col gap-1 text-sm text-[#ccc]">
+                      {label}
+                      <input
+                        type="number"
+                        value={cal[key]}
+                        onChange={(e) => updateCal(key, e.target.value)}
+                        className="bg-[#111] border border-[#444] rounded-md text-white px-2.5 py-2 text-sm w-full box-border"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Submit */}
+              <button
+                type="submit"
+                disabled={!file || loading}
+                className="w-full py-3.5 bg-[#22c55e] text-black text-base font-bold rounded-lg cursor-pointer transition-colors hover:bg-[#16a34a] disabled:bg-[#333] disabled:text-[#666] disabled:cursor-not-allowed"
+              >
+                {loading ? "Analyzing…" : "Analyze Putt"}
+              </button>
+
+              {/* Error */}
+              {error && (
+                <div className="bg-[#3a0a0a] border border-[#7f1d1d] text-[#fca5a5] rounded-lg px-4 py-3 text-sm">
+                  {error}
+                </div>
+              )}
+
+              {/* Result */}
+              {result && (
+                <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5">
+                  <h2 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-2">
+                    Result
+                  </h2>
+                  {result.message && <p className="text-xs text-[#888] mb-2">{result.message}</p>}
+                  {result.pass_fail && (
+                    <div className={`verdict ${result.pass_fail}`}>
+                      {result.pass_fail.toUpperCase()}
+                    </div>
+                  )}
+                  {result.offset_mm !== null && (
+                    <p className="text-sm mt-1">
+                      Offset:{" "}
+                      <strong>
+                        {result.offset_mm > 0 ? "+" : ""}
+                        {result.offset_mm} mm
+                      </strong>{" "}
+                      ({result.direction})
+                    </p>
+                  )}
+                  <p className="text-xs text-[#888] mt-2">
+                    Frames with ball detected: {result.track_count}
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
-        </section>
-
-        <button type="submit" disabled={!file || loading} className="btn-primary">
-          {loading ? "Analyzing…" : "Analyze Putt"}
-        </button>
-      </form>
-
-      {error && <div className="error">{error}</div>}
-
-      {result && (
-        <section className="card result">
-          <h2>Result</h2>
-          {result.message && <p className="hint">{result.message}</p>}
-          {result.pass_fail && (
-            <div className={`verdict ${result.pass_fail}`}>
-              {result.pass_fail.toUpperCase()}
-            </div>
-          )}
-          {result.offset_mm !== null && (
-            <p>
-              Offset:{" "}
-              <strong>
-                {result.offset_mm > 0 ? "+" : ""}
-                {result.offset_mm} mm
-              </strong>{" "}
-              ({result.direction})
-            </p>
-          )}
-          <p className="hint">Frames with ball detected: {result.track_count}</p>
-        </section>
-      )}
+        </form>
+      </div>
     </div>
   );
 }
