@@ -19,5 +19,5 @@ echo "Backend: http://localhost:8000"
 echo "Frontend: http://localhost:5173"
 echo "Press Ctrl-C to stop both."
 
-trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null" EXIT
-wait
+trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null; wait $BACKEND_PID $FRONTEND_PID 2>/dev/null" INT TERM EXIT
+wait $BACKEND_PID $FRONTEND_PID
