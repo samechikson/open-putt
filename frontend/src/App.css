@@ -1,3 +1,11 @@
+:root {
+  --plyr-color-main: #22c55e;
+}
+
+.plyr {
+  border-radius: 6px;
+}
+
 .cal-canvas {
   position: absolute;
   inset: 0;
@@ -5,6 +13,7 @@
   height: 100%;
   pointer-events: none;
   border-radius: 6px;
+  z-index: 4;
 }
 
 .detect-status { font-size: 0.8rem; margin: 8px 0 0; }

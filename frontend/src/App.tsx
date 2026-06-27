@@ -1,5 +1,26 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import * as PlyrNS from "plyr";
+import "plyr/dist/plyr.css";
 import "./App.css";
+
+// plyr's bundled types use `export =`, but its ESM build exposes a real default
+// export. Resolve the constructor at runtime while keeping the instance type.
+const Plyr = ((PlyrNS as { default?: unknown }).default ?? PlyrNS) as {
+  new (target: HTMLElement | string, options?: PlyrNS.Options): PlyrNS;
+};
+
+const COMMON_FPS = [24, 25, 30, 48, 50, 60, 90, 120, 144, 240];
+
+// Snap a measured frame rate to the nearest common value when it's within ~8%,
+// otherwise just round it.
+function snapFps(measured: number): number {
+  const nearest = COMMON_FPS.reduce((prev, cur) =>
+    Math.abs(cur - measured) < Math.abs(prev - measured) ? cur : prev,
+  );
+  return Math.abs(nearest - measured) / nearest <= 0.08
+    ? nearest
+    : Math.max(1, Math.round(measured));
+}
 
 interface CalibrationValues {
   gateCenterX: number;
@@ -46,9 +67,15 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fps, setFps] = useState(30);
+  const [currentFrame, setCurrentFrame] = useState(0);
+  const [totalFrames, setTotalFrames] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
+  const plyrRef = useRef<PlyrNS | null>(null);
+  const didInitVideo = useRef(false);
 
   const drawCalibration = useCallback(() => {
     const canvas = canvasRef.current;
@@ -168,6 +195,37 @@ function App() {
     drawCalibration();
   }, [drawCalibration]);
 
+  // Initialise Plyr on the underlying <video> element (it enhances the element
+  // in place, so videoRef stays valid). Move the calibration canvas into Plyr's
+  // video wrapper so the inset:0 overlay aligns with the rendered frame.
+  useEffect(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const preview = previewRef.current;
+    if (!videoUrl || !video) return;
+
+    const player = new Plyr(video, {
+      controls: ["play", "progress", "current-time", "mute", "fullscreen"],
+      keyboard: { focused: false, global: false },
+      clickToPlay: true,
+      hideControls: false,
+    });
+    plyrRef.current = player;
+
+    const wrapper = player.elements.container?.querySelector<HTMLElement>(
+      ".plyr__video-wrapper",
+    );
+    if (wrapper && canvas) wrapper.appendChild(canvas);
+
+    return () => {
+      // Restore the canvas to its original parent before destroying Plyr so
+      // React doesn't lose the node when Plyr removes its wrapper.
+      if (canvas && preview) preview.appendChild(canvas);
+      player.destroy();
+      plyrRef.current = null;
+    };
+  }, [videoUrl]);
+
   const detectBallInFirstFrame = useCallback(
     async (video: HTMLVideoElement, w: number, h: number) => {
       setDetectStatus("detecting");
@@ -228,6 +286,10 @@ function App() {
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     setVideoUrl(f ? URL.createObjectURL(f) : null);
     setVideoDims(null);
+    setFps(30);
+    setCurrentFrame(0);
+    setTotalFrames(0);
+    didInitVideo.current = false;
   };
 
   const syncCanvasSize = useCallback(() => {
@@ -255,10 +317,62 @@ function App() {
     syncCanvasSize();
   };
 
-  const handleVideoData = () => {
+  // Estimate the clip's frame rate by briefly (muted) playing it and measuring
+  // the gap between presented frames via requestVideoFrameCallback. Falls back
+  // to the current fps if the API is unavailable or measurement fails.
+  const measureFps = useCallback((video: HTMLVideoElement) => {
+    return new Promise<void>((resolve) => {
+      if (!("requestVideoFrameCallback" in video)) {
+        resolve();
+        return;
+      }
+      const deltas: number[] = [];
+      let lastMediaTime: number | null = null;
+      const finish = () => {
+        const positive = deltas.filter((d) => d > 0).sort((a, b) => a - b);
+        if (positive.length) {
+          const median = positive[Math.floor(positive.length / 2)];
+          if (median > 0) setFps(snapFps(1 / median));
+        }
+        video.pause();
+        const onSeeked = () => {
+          video.removeEventListener("seeked", onSeeked);
+          resolve();
+        };
+        video.addEventListener("seeked", onSeeked);
+        video.currentTime = 0;
+      };
+      const onFrame: VideoFrameRequestCallback = (_now, metadata) => {
+        if (lastMediaTime !== null)
+          deltas.push(metadata.mediaTime - lastMediaTime);
+        lastMediaTime = metadata.mediaTime;
+        if (deltas.length >= 15) {
+          finish();
+        } else {
+          video.requestVideoFrameCallback(onFrame);
+        }
+      };
+      const prevMuted = video.muted;
+      video.muted = true;
+      video
+        .play()
+        .then(() => {
+          video.requestVideoFrameCallback(onFrame);
+        })
+        .catch(() => {
+          video.muted = prevMuted;
+          resolve();
+        });
+    });
+  }, []);
+
+  const handleVideoData = async () => {
     const video = videoRef.current;
     if (!video || !video.videoWidth) return;
-    detectBallInFirstFrame(video, video.videoWidth, video.videoHeight);
+    if (didInitVideo.current) return;
+    didInitVideo.current = true;
+    await detectBallInFirstFrame(video, video.videoWidth, video.videoHeight);
+    await measureFps(video);
   };
 
   useEffect(() => {
@@ -269,6 +383,65 @@ function App() {
     if (videoRef.current) observer.observe(videoRef.current);
     return () => observer.disconnect();
   }, [syncCanvasSize, drawCalibration]);
+
+  // Keep the frame readout in sync with playback / scrubbing / fps changes.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !videoUrl) return;
+    const update = () => {
+      setCurrentFrame(Math.round(video.currentTime * fps));
+      if (video.duration && Number.isFinite(video.duration))
+        setTotalFrames(Math.max(1, Math.round(video.duration * fps)));
+    };
+    update();
+    video.addEventListener("timeupdate", update);
+    video.addEventListener("seeked", update);
+    video.addEventListener("loadedmetadata", update);
+    return () => {
+      video.removeEventListener("timeupdate", update);
+      video.removeEventListener("seeked", update);
+      video.removeEventListener("loadedmetadata", update);
+    };
+  }, [fps, videoUrl]);
+
+  const stepFrame = useCallback(
+    (delta: number) => {
+      const video = videoRef.current;
+      if (!video || !video.duration) return;
+      video.pause();
+      const frame = Math.round(video.currentTime * fps) + delta;
+      const maxFrame = Math.max(0, Math.round(video.duration * fps) - 1);
+      const clamped = Math.min(Math.max(frame, 0), maxFrame);
+      // Seek to mid-frame so the browser reliably lands on the target frame
+      // instead of rounding back onto the current one.
+      video.currentTime = Math.min((clamped + 0.5) / fps, video.duration);
+    },
+    [fps],
+  );
+
+  // Left/right arrow keys step one frame back/forward whenever a video is
+  // loaded — unless the user is typing in an input (calibration / FPS fields).
+  useEffect(() => {
+    if (!videoUrl) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = document.activeElement;
+      const typing =
+        el instanceof HTMLElement &&
+        (el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.isContentEditable);
+      if (typing) return;
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        stepFrame(1);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        stepFrame(-1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [videoUrl, stepFrame]);
 
   const updateCal = (key: keyof CalibrationValues, val: string) => {
     setCal((prev) => ({ ...prev, [key]: Number(val) }));
@@ -350,17 +523,54 @@ function App() {
                   <h2 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-3">
                     Preview
                   </h2>
-                  <div className="relative w-full">
+                  <div ref={previewRef} className="relative w-full">
                     <video
                       ref={videoRef}
                       src={videoUrl}
                       className="w-full block rounded-md bg-black"
-                      controls
+                      playsInline
                       onLoadedMetadata={handleVideoMetadata}
                       onLoadedData={handleVideoData}
                     />
                     <canvas ref={canvasRef} className="cal-canvas" />
                   </div>
+
+                  {/* Frame-by-frame controls */}
+                  <div className="flex flex-wrap items-center gap-2 mt-3">
+                    <button
+                      type="button"
+                      onClick={() => stepFrame(-1)}
+                      className="px-3 py-1.5 bg-[#222] border border-[#444] rounded-md text-sm text-white cursor-pointer hover:bg-[#2c2c2c]"
+                    >
+                      ⏮ Prev
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => stepFrame(1)}
+                      className="px-3 py-1.5 bg-[#222] border border-[#444] rounded-md text-sm text-white cursor-pointer hover:bg-[#2c2c2c]"
+                    >
+                      Next ⏭
+                    </button>
+                    <span className="text-xs text-[#888] tabular-nums ml-1">
+                      frame {currentFrame} / {totalFrames || "—"}
+                    </span>
+                    <label className="flex items-center gap-1.5 text-xs text-[#888] ml-auto">
+                      FPS
+                      <input
+                        type="number"
+                        min={1}
+                        value={fps}
+                        onChange={(e) =>
+                          setFps(Math.max(1, Number(e.target.value) || 1))
+                        }
+                        className="w-16 bg-[#111] border border-[#444] rounded-md text-white px-2 py-1 text-sm"
+                      />
+                    </label>
+                  </div>
+                  <p className="text-[11px] text-[#666] mt-1">
+                    Use the ← → arrow keys to step frames.
+                  </p>
+
                   <p className={`detect-status ${detectStatus}`}>
                     {detectStatus === "detecting" && "Detecting ball…"}
                     {detectStatus === "found" && "Ball detected"}
