@@ -36,6 +36,7 @@ interface AnalysisResult {
   pass_fail: string | null;
   track_count: number;
   positions: [number, number][];
+  hough_circles?: [number, number, number][]; // [x, y, r] in source-video px
   crossing_pos: [number, number] | null;
   message?: string;
 }
@@ -62,6 +63,9 @@ function App() {
     "idle" | "detecting" | "found" | "not-found"
   >("idle");
   const [ballPath, setBallPath] = useState<[number, number][]>([]);
+  const [houghCircles, setHoughCircles] = useState<
+    [number, number, number][]
+  >([]);
   const [crossingPos, setCrossingPos] = useState<[number, number] | null>(null);
   const [cal, setCal] = useState<CalibrationValues>(DEFAULT_CAL);
   const [loading, setLoading] = useState(false);
@@ -189,7 +193,19 @@ function App() {
       ctx.arc(bx, by, 3, 0, Math.PI * 2);
       ctx.fill();
     }
-  }, [cal, videoDims, ballCircle, ballPath, crossingPos]);
+
+    if (houghCircles.length) {
+      ctx.strokeStyle = "rgba(80, 180, 255, 0.9)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([]);
+      const rScale = Math.max(scaleX, scaleY);
+      for (const [hx, hy, hr] of houghCircles) {
+        ctx.beginPath();
+        ctx.arc(hx * scaleX, hy * scaleY, hr * rScale, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  }, [cal, videoDims, ballCircle, ballPath, houghCircles, crossingPos]);
 
   useEffect(() => {
     drawCalibration();
@@ -282,6 +298,7 @@ function App() {
     setBallCircle(null);
     setDetectStatus("idle");
     setBallPath([]);
+    setHoughCircles([]);
     setCrossingPos(null);
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     setVideoUrl(f ? URL.createObjectURL(f) : null);
@@ -476,6 +493,7 @@ function App() {
       const data: AnalysisResult = await res.json();
       setResult(data);
       setBallPath(data.positions ?? []);
+      setHoughCircles(data.hough_circles ?? []);
       setCrossingPos(data.crossing_pos ?? null);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Unknown error");

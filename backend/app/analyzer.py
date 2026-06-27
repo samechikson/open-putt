@@ -108,6 +108,7 @@ def analyze_putt(
 
     mm_per_px = gate_width_mm / gate_width_px
     positions: list[tuple[float, float]] = []
+    hough_circles: list[tuple[float, float, float]] = []
     crossing_pos: Optional[tuple[float, float]] = None
 
     if ball_radius_hint and ball_radius_hint > 0:
@@ -171,6 +172,7 @@ def analyze_putt(
             fix = _hough_detect(gray, min_r, max_r, param2=20, roi=corr_roi)
             if fix is not None:
                 hx, hy, hr = fix
+                hough_circles.append((hx, hy, hr))
                 if ((hx - px) ** 2 + (hy - py) ** 2) ** 0.5 < ball_r * 2:
                     ball_r = max(5, int(hr))
                     bx = max(0, int(hx - ball_r))
@@ -188,6 +190,7 @@ def analyze_putt(
                 best = _hough_detect(gray, min_r, max_r, param2=15)
             if best is not None:
                 hx, hy, hr = best
+                hough_circles.append((hx, hy, hr))
                 if last_y is None or hy >= last_y - ball_r:
                     ball_r = max(5, int(hr))
                     bx = max(0, int(hx - hr))
@@ -210,6 +213,9 @@ def analyze_putt(
     cap.release()
 
     serialized = [[round(x, 1), round(y, 1)] for x, y in positions]
+    serialized_hough = [
+        [round(x, 1), round(y, 1), round(r, 1)] for x, y, r in hough_circles
+    ]
 
     if crossing_pos is None:
         if positions:
@@ -221,6 +227,7 @@ def analyze_putt(
             "pass_fail": None,
             "track_count": len(positions),
             "positions": serialized,
+            "hough_circles": serialized_hough,
             "crossing_pos": None,
             "message": "Ball did not clearly cross gate line — check calibration values",
         }
@@ -237,5 +244,6 @@ def analyze_putt(
         "pass_fail": pass_fail,
         "track_count": len(positions),
         "positions": serialized,
+        "hough_circles": serialized_hough,
         "crossing_pos": [round(crossing_pos[0], 1), round(crossing_pos[1], 1)],
     }
