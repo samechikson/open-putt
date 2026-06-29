@@ -57,7 +57,13 @@ async def analyze(
 
 
 @app.post("/detect-ball")
-async def detect_ball(frame: UploadFile = File(...)):
+async def detect_ball(
+    frame: UploadFile = File(...),
+    center_x: int = Form(None),
+    search_half_width: int = Form(None),
+):
     data = await frame.read()
-    result = detect_ball_in_frame(data)
+    result = detect_ball_in_frame(
+        data, center_x=center_x, search_half_width=search_half_width
+    )
     return JSONResponse(result)

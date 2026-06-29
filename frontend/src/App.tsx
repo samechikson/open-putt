@@ -33,7 +33,6 @@ interface AnalysisResult {
   offset_px: number | null;
   offset_mm: number | null;
   direction: string | null;
-  pass_fail: string | null;
   track_count: number;
   positions: [number, number][];
   hough_circles?: [number, number, number][]; // [x, y, r] in source-video px
@@ -58,6 +57,10 @@ function App() {
     x: number;
     y: number;
     r: number;
+  } | null>(null);
+  const [laserPoints, setLaserPoints] = useState<{
+    top: [number, number] | null;
+    bottom: [number, number] | null;
   } | null>(null);
   const [detectStatus, setDetectStatus] = useState<
     "idle" | "detecting" | "found" | "not-found"
@@ -194,6 +197,25 @@ function App() {
       ctx.fill();
     }
 
+    // Laser dots from the mount — magenta crosses confirming auto-calibration.
+    if (laserPoints) {
+      ctx.strokeStyle = "rgba(255, 0, 200, 0.95)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([]);
+      const arm = 8;
+      for (const pt of [laserPoints.top, laserPoints.bottom]) {
+        if (!pt) continue;
+        const lx = pt[0] * scaleX;
+        const ly = pt[1] * scaleY;
+        ctx.beginPath();
+        ctx.moveTo(lx - arm, ly);
+        ctx.lineTo(lx + arm, ly);
+        ctx.moveTo(lx, ly - arm);
+        ctx.lineTo(lx, ly + arm);
+        ctx.stroke();
+      }
+    }
+
     if (houghCircles.length) {
       ctx.strokeStyle = "rgba(80, 180, 255, 0.9)";
       ctx.lineWidth = 2;
@@ -205,7 +227,7 @@ function App() {
         ctx.stroke();
       }
     }
-  }, [cal, videoDims, ballCircle, ballPath, houghCircles, crossingPos]);
+  }, [cal, videoDims, ballCircle, ballPath, houghCircles, crossingPos, laserPoints]);
 
   useEffect(() => {
     drawCalibration();
@@ -267,7 +289,7 @@ function App() {
       const fd = new FormData();
       fd.append("frame", blob, "frame.jpg");
       fd.append("center_x", String(Math.round(w / 2)));
-      fd.append("gate_width_px", String(Math.round(w * 0.2)));
+      fd.append("search_half_width", String(Math.round(w * 0.2)));
       try {
         const res = await fetch("http://localhost:8000/detect-ball", {
           method: "POST",
@@ -278,6 +300,21 @@ function App() {
           return;
         }
         const data = await res.json();
+        if (data.lasers) {
+          setLaserPoints(data.lasers);
+        }
+        // Auto-calibrate from the fixed laser dots: top → center x, bottom → target line.
+        if (data.gate_center_x != null || data.gate_line_y != null) {
+          setCal((prev) => ({
+            ...prev,
+            ...(data.gate_center_x != null
+              ? { gateCenterX: data.gate_center_x }
+              : {}),
+            ...(data.gate_line_y != null
+              ? { gateLineY: data.gate_line_y }
+              : {}),
+          }));
+        }
         if (data.x !== null) {
           setBallCircle({ x: data.x, y: data.y, r: data.r });
           setDetectStatus("found");
@@ -660,20 +697,19 @@ function App() {
                   {result.message && (
                     <p className="text-xs text-[#888] mb-2">{result.message}</p>
                   )}
-                  {result.pass_fail && (
-                    <div className={`verdict ${result.pass_fail}`}>
-                      {result.pass_fail.toUpperCase()}
+                  {result.offset_mm !== null ? (
+                    <div>
+                      <div className="offset-value">
+                        {Math.abs(result.offset_mm)} mm
+                      </div>
+                      <p className="text-sm text-[#aaa] -mt-1">
+                        {result.direction === "center"
+                          ? "on the center line"
+                          : `off center to the ${result.direction}`}
+                      </p>
                     </div>
-                  )}
-                  {result.offset_mm !== null && (
-                    <p className="text-sm mt-1">
-                      Offset:{" "}
-                      <strong>
-                        {result.offset_mm > 0 ? "+" : ""}
-                        {result.offset_mm} mm
-                      </strong>{" "}
-                      ({result.direction})
-                    </p>
+                  ) : (
+                    <p className="text-sm text-[#888]">No offset measured</p>
                   )}
                   <p className="text-xs text-[#888] mt-2">
                     Frames with ball detected: {result.track_count}

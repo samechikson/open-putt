@@ -22,6 +22,4 @@
 .detect-status.found { color: #22c55e; }
 .detect-status.not-found { color: #f87171; }
 
-.verdict { font-size: 2.5rem; font-weight: 900; letter-spacing: 0.05em; margin: 12px 0; }
-.verdict.pass { color: #22c55e; }
-.verdict.fail { color: #ef4444; }
+.offset-value { font-size: 2.5rem; font-weight: 900; letter-spacing: 0.02em; margin: 12px 0 2px; color: #e5e5e5; }
