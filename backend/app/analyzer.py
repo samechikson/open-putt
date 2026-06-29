@@ -181,7 +181,9 @@ def detect_ball_in_frame(
         "top": [round(top[0], 1), round(top[1], 1)] if top is not None else None,
         "bottom": [round(bottom[0], 1), round(bottom[1], 1)] if bottom is not None else None,
     }
-    gate_center_x = round(top[0]) if top is not None else None
+    # Gate + target are anchored on the bottom dot (the target); the aim line is
+    # drawn through both dots on the frontend.
+    gate_center_x = round(bottom[0]) if bottom is not None else None
     gate_line_y = round(bottom[1]) if bottom is not None else None
 
     result: dict = {

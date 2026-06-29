@@ -107,12 +107,27 @@ function App() {
     ctx.lineTo(canvas.width, ly);
     ctx.stroke();
 
+    // Aim line: draw through both laser dots (extended to the frame edges) so it
+    // follows the real putt line; fall back to a vertical line at cx otherwise.
+    const top = laserPoints?.top;
+    const bottom = laserPoints?.bottom;
+    const tilted = top && bottom && top[1] !== bottom[1];
+    const xAt = (y: number) => {
+      const [tx, ty] = top!;
+      const [bx, by] = bottom!;
+      return (tx + ((y / scaleY - ty) * (bx - tx)) / (by - ty)) * scaleX;
+    };
     ctx.strokeStyle = "rgba(0, 230, 100, 0.9)";
     ctx.lineWidth = 2;
     ctx.setLineDash([]);
     ctx.beginPath();
-    ctx.moveTo(cx, 0);
-    ctx.lineTo(cx, canvas.height);
+    if (tilted) {
+      ctx.moveTo(xAt(0), 0);
+      ctx.lineTo(xAt(canvas.height), canvas.height);
+    } else {
+      ctx.moveTo(cx, 0);
+      ctx.lineTo(cx, canvas.height);
+    }
     ctx.stroke();
 
     ctx.strokeStyle = "rgba(0, 180, 255, 0.85)";
@@ -133,7 +148,7 @@ function App() {
 
     ctx.font = "bold 13px system-ui, sans-serif";
     ctx.fillStyle = "rgba(0, 230, 100, 0.95)";
-    ctx.fillText("center", cx + 6, 18);
+    ctx.fillText("center", (tilted ? xAt(18) : cx) + 6, 18);
     ctx.fillStyle = "rgba(255, 220, 0, 0.95)";
     ctx.fillText("gate line", 6, ly - 6);
 
