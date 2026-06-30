@@ -102,6 +102,87 @@ def _hough_detect(
     return _brightest_circle(gray, candidates)
 
 
+def _white_mask(frame: np.ndarray) -> np.ndarray:
+    """Binary mask of bright, low-saturation (white) regions — i.e. the golf ball.
+
+    A putting green is strongly saturated green, so thresholding on low saturation
+    and high value isolates the white ball without relying on edges (which the
+    grass texture overwhelms). Morphological open/close removes grass speckle and
+    fuses the ball's dimples / logo text into one solid blob.
+    """
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    s = hsv[:, :, 1]
+    v = hsv[:, :, 2]
+    mask = ((s < 70) & (v > 150)).astype(np.uint8) * 255
+    kernel = np.ones((5, 5), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    return mask
+
+
+def _detect_white_ball(
+    frame: np.ndarray,
+    min_r: int,
+    max_r: int,
+    roi: Optional[tuple[int, int, int, int]] = None,  # (x1, y1, x2, y2)
+    near: Optional[tuple[float, float]] = None,
+    center_x: Optional[int] = None,
+) -> Optional[tuple[float, float, float]]:
+    """Locate the white golf ball by colour segmentation.
+
+    Returns the ``(x, y, r)`` of the best white, roughly-circular blob whose
+    enclosing radius falls in ``[min_r, max_r]``. With ``near`` (tracking or a
+    supplied hint) the nearest qualifying blob is chosen; otherwise blobs are
+    scored by size, circularity, and proximity to the expected rest position
+    (``center_x`` and the top of the frame).
+    """
+    mask = _white_mask(frame)
+    contours, _ = cv2.findContours(
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    h, w = frame.shape[:2]
+    # (x, y, r, area, circularity) for each qualifying blob.
+    candidates: list[tuple[float, float, float, float, float]] = []
+    for c in contours:
+        area = float(cv2.contourArea(c))
+        if area <= 0:
+            continue
+        (cx, cy), cr = cv2.minEnclosingCircle(c)
+        if cr < min_r or cr > max_r:
+            continue
+        if roi is not None:
+            x1, y1, x2, y2 = roi
+            if not (x1 <= cx <= x2 and y1 <= cy <= y2):
+                continue
+        perim = cv2.arcLength(c, True)
+        circ = float(4.0 * np.pi * area / (perim * perim)) if perim > 0 else 0.0
+        if circ < 0.6:
+            continue
+        candidates.append((float(cx), float(cy), float(cr), area, circ))
+
+    if not candidates:
+        return None
+
+    if near is not None:
+        nx, ny = near
+        best = min(candidates, key=lambda c: (c[0] - nx) ** 2 + (c[1] - ny) ** 2)
+        return (best[0], best[1], best[2])
+
+    # Cold seed: favour large, circular blobs near the expected x and toward the
+    # top of the frame, where the ball rests against the putter face.
+    bx = float(center_x) if center_x is not None else w / 2.0
+
+    def score(c: tuple[float, float, float, float, float]) -> float:
+        x, y, _r, area, circ = c
+        x_pref = 1.0 - min(1.0, abs(x - bx) / (w / 2.0))
+        y_pref = 1.0 - (y / h)  # higher near the top
+        return area * circ * (0.5 + 0.5 * x_pref) * (0.5 + 0.5 * y_pref)
+
+    best = max(candidates, key=score)
+    return (best[0], best[1], best[2])
+
+
 def _make_roi(
     w: int, h: int, center_x: int, half_width: int, top_fraction: float = 1 / 3
 ) -> tuple[int, int, int, int]:
@@ -148,28 +229,23 @@ def detect_ball_in_frame(
     h, w = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    min_r = max(10, w // 50)
-    max_r = max(min_r + 20, w // 12)
+    # Wide range: the ball is smallest at rest (far) and grows as it rolls toward
+    # the camera, so allow up to ~w/5. Hough is now only a fallback.
+    min_r = max(8, w // 60)
+    max_r = max(min_r + 20, w // 5)
 
     # Locate the mount's fixed laser dots: top = ball rest, bottom = target.
     lasers = _detect_laser_dots(frame)
     top = lasers[0] if len(lasers) >= 1 else None
     bottom = lasers[1] if len(lasers) >= 2 else None
 
-    best = None
-    if top is not None:
-        # Anchor the ball search to a tight box around the top laser, picking the
-        # circle nearest the dot. The ball center sits just above the laser, so
-        # extend the box mostly upward.
-        tx, ty = top
-        tight = (
-            max(0, int(tx - 4 * max_r)), max(0, int(ty - 5 * max_r)),
-            min(w, int(tx + 4 * max_r)), min(h, int(ty + max_r)),
-        )
-        best = _hough_detect(gray, min_r, max_r, param2=20, roi=tight, near=(tx, ty))
+    # Primary: segment the white ball by colour (robust against grass texture and
+    # independent of the laser dots, which wash out outdoors).
+    best = _detect_white_ball(frame, min_r, max_r, center_x=center_x)
 
     if best is None:
-        # Fall back to the frame-center band ROI, then a relaxed full-frame pass.
+        # Fall back to the old edge-based search (handles low-contrast / indoor
+        # scenes): frame-center band ROI, then a relaxed full-frame pass.
         roi = None
         if center_x is not None and search_half_width:
             roi = _make_roi(w, h, center_x, search_half_width, top_fraction=0)
@@ -215,19 +291,14 @@ def analyze_putt(
 
     mm_per_px = gate_width_mm / gate_width_px
     positions: list[tuple[float, float]] = []
-    hough_circles: list[tuple[float, float, float]] = []
+    # Per-frame detected circles, surfaced for the frontend's debug overlay.
+    detected_circles: list[tuple[float, float, float]] = []
 
-    if ball_radius_hint and ball_radius_hint > 0:
-        min_r = max(5, ball_radius_hint - 10)
-        max_r = ball_radius_hint + 10
-    else:
-        min_r = None  # computed per-frame once dimensions are known
-        max_r = None
-
-    roi: Optional[tuple[int, int, int, int]] = None
-    tracker: Optional[cv2.Tracker] = None
-    ball_r: int = ball_radius_hint if (ball_radius_hint and ball_radius_hint > 0) else 15
-    last_y: Optional[float] = None
+    min_r: Optional[int] = None  # computed per-frame once dimensions are known
+    max_r: Optional[int] = None
+    ball_r: float = float(ball_radius_hint) if (ball_radius_hint and ball_radius_hint > 0) else 15.0
+    last_x: Optional[float] = float(ball_x_hint) if ball_x_hint is not None else None
+    last_y: Optional[float] = float(ball_y_hint) if ball_y_hint is not None else None
 
     frame_idx = 0
     while True:
@@ -236,99 +307,43 @@ def analyze_putt(
             break
 
         h, w = frame.shape[:2]
-        if roi is None:
-            roi = _make_roi(w, h, gate_center_x, gate_width_px)
         if min_r is None:
-            min_r = max(10, w // 50)
-            max_r = max(min_r + 20, w // 12)
+            # The ball grows as it rolls toward the camera; allow a wide range.
+            min_r = max(8, w // 60)
+            max_r = max(min_r + 20, w // 5)
+
+        # On the first frame without a supplied hint, seed from the white ball
+        # nearest the top laser dot (the ball rests there) if present, else the
+        # best-scoring blob near the gate center / top of frame.
+        if frame_idx == 0 and last_x is None:
+            lasers = _detect_laser_dots(frame)
+            near0 = lasers[0] if lasers else None
+            seed = _detect_white_ball(
+                frame, min_r, max_r, near=near0, center_x=gate_center_x
+            )
+            if seed is not None:
+                last_x, last_y, ball_r = seed[0], seed[1], max(5.0, seed[2])
+
+        near = (last_x, last_y) if last_x is not None and last_y is not None else None
+        det = _detect_white_ball(frame, min_r, max_r, near=near, center_x=gate_center_x)
 
         detected_pos: Optional[tuple[float, float]] = None
-
-        # On the very first frame, if no ball hint was supplied, derive one from
-        # the top laser dot (the ball rests at it) so the tracker seeds on the
-        # real ball rather than whatever the full-frame Hough fallback finds.
-        if frame_idx == 0 and ball_x_hint is None and ball_y_hint is None:
-            lasers = _detect_laser_dots(frame)
-            if lasers:
-                tx, ty = lasers[0]
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                seed_roi = (
-                    max(0, int(tx - 4 * max_r)), max(0, int(ty - 5 * max_r)),
-                    min(w, int(tx + 4 * max_r)), min(h, int(ty + max_r)),
-                )
-                seed = _hough_detect(gray, min_r, max_r, param2=20, roi=seed_roi)
-                if seed is not None:
-                    ball_x_hint = int(seed[0])
-                    ball_y_hint = int(seed[1])
-                    ball_r = max(5, int(seed[2]))
-
-        # On the very first frame, seed the tracker from the known initial position
-        if frame_idx == 0 and tracker is None and ball_x_hint is not None and ball_y_hint is not None:
-            r = ball_r
-            bx = max(0, ball_x_hint - r)
-            by = max(0, ball_y_hint - r)
-            bw = min(2 * r, w - bx)
-            bh = min(2 * r, h - by)
-            tracker = cv2.TrackerCSRT_create()
-            tracker.init(frame, (bx, by, bw, bh))
-            last_y = float(ball_y_hint)
-
-        if tracker is not None:
-            ok, bbox = tracker.update(frame)
-            if ok:
-                cx = bbox[0] + bbox[2] / 2.0
-                cy = bbox[1] + bbox[3] / 2.0
-                if last_y is None or cy >= last_y - ball_r:
-                    detected_pos = (cx, cy)
-                else:
-                    tracker = None  # drifted upward — reset
-
-        # Periodic Hough correction: re-anchor the tracker every 10 frames to
-        # counteract drift caused by the ball rotating as it rolls
-        if detected_pos is not None and frame_idx % 10 == 0:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            px, py = detected_pos
-            margin = ball_r * 3
-            corr_roi = (
-                max(0, int(px - margin)), max(0, int(py - margin)),
-                min(w, int(px + margin)), min(h, int(py + margin)),
-            )
-            fix = _hough_detect(gray, min_r, max_r, param2=20, roi=corr_roi)
-            if fix is not None:
-                hx, hy, hr = fix
-                hough_circles.append((hx, hy, hr))
-                if ((hx - px) ** 2 + (hy - py) ** 2) ** 0.5 < ball_r * 2:
-                    ball_r = max(5, int(hr))
-                    bx = max(0, int(hx - ball_r))
-                    by = max(0, int(hy - ball_r))
-                    bw = min(2 * ball_r, w - bx)
-                    bh = min(2 * ball_r, h - by)
-                    tracker = cv2.TrackerCSRT_create()
-                    tracker.init(frame, (bx, by, bw, bh))
-                    detected_pos = (hx, hy)
-
-        if detected_pos is None and frame_idx % 5 == 0:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            best = _hough_detect(gray, min_r, max_r, param2=15, roi=roi)
-            if best is None:
-                best = _hough_detect(gray, min_r, max_r, param2=15)
-            if best is not None:
-                hx, hy, hr = best
-                hough_circles.append((hx, hy, hr))
-                if last_y is None or hy >= last_y - ball_r:
-                    ball_r = max(5, int(hr))
-                    bx = max(0, int(hx - hr))
-                    by = max(0, int(hy - hr))
-                    bw = min(int(2 * hr), w - bx)
-                    bh = min(int(2 * hr), h - by)
-                    tracker = cv2.TrackerCSRT_create()
-                    tracker.init(frame, (bx, by, bw, bh))
-                    detected_pos = (hx, hy)
+        if det is not None:
+            dx, dy, dr = det
+            # Reject spurious blobs: the ball only grows gradually as it nears the
+            # camera, and never travels backward (away from the gate line) by more
+            # than its own radius.
+            radius_ok = last_y is None or (0.5 * ball_r <= dr <= 2.0 * ball_r)
+            forward_ok = last_y is None or dy >= last_y - ball_r
+            if radius_ok and forward_ok:
+                detected_pos = (dx, dy)
+                ball_r = 0.6 * ball_r + 0.4 * dr  # smooth the growing radius
+                detected_circles.append((dx, dy, dr))
 
         if detected_pos is not None:
             x, y = detected_pos
             positions.append((x, y))
-            last_y = y
+            last_x, last_y = x, y
 
         frame_idx += 1
 
@@ -336,7 +351,7 @@ def analyze_putt(
 
     serialized = [[round(x, 1), round(y, 1)] for x, y in positions]
     serialized_hough = [
-        [round(x, 1), round(y, 1), round(r, 1)] for x, y, r in hough_circles
+        [round(x, 1), round(y, 1), round(r, 1)] for x, y, r in detected_circles
     ]
 
     if not positions:
