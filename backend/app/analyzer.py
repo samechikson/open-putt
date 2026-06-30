@@ -133,10 +133,13 @@ def _white_ball_candidates(
     (both are low-saturation and bright), and at address the shaft fuses to the
     ball in the mask — so a contour-shape test (circularity/solidity) rejects the
     fused blob and loses the ball. Instead, for each connected white component we
-    take the peak of its distance transform: the centre of the largest inscribed
-    circle, with the peak value as its radius. A thin shaft contributes only tiny
-    distances, so this locks onto the round ball and ignores attachments. The
-    remaining ball-vs-hosel ambiguity is resolved by the caller spatially
+    use its distance transform: the peak value sizes the largest inscribed circle
+    (a thin shaft contributes only tiny distances, so this rejects attachments),
+    and the centre is the distance-weighted centroid of the component *core*
+    (pixels above half the peak distance). Averaging the thick core rather than
+    taking the single peak keeps the centre stable when the ball's alignment line
+    or motion blur splits the disc into lobes — the peak alone flips between them.
+    The remaining ball-vs-hosel ambiguity is resolved by the caller spatially
     (aim-line corridor) and temporally (velocity-predicted tracking).
     """
     mask = _white_mask(frame)
@@ -149,11 +152,19 @@ def _white_ball_candidates(
             continue
         comp = (labels == i).astype(np.uint8)
         dist = cv2.distanceTransform(comp, cv2.DIST_L2, 5)
-        _minv, max_dist, _minl, max_loc = cv2.minMaxLoc(dist)
+        _minv, max_dist, _minl, _maxl = cv2.minMaxLoc(dist)
         r = float(max_dist)  # radius of the largest inscribed circle
         if r < min_r or r > max_r:
             continue
-        candidates.append((float(max_loc[0]), float(max_loc[1]), r, float(area), 1.0))
+        # Centre = distance-weighted centroid of the thick core (dist > r/2). The
+        # thin shaft and ragged blur fringe fall below the threshold and so are
+        # excluded; the slit from an alignment line is averaged across both lobes.
+        ys, xs = np.where(dist > 0.5 * max_dist)
+        wgt = dist[ys, xs]
+        total = float(wgt.sum())
+        cx = float((xs * wgt).sum() / total)
+        cy = float((ys * wgt).sum() / total)
+        candidates.append((cx, cy, r, float(area), 1.0))
     return candidates
 
 
