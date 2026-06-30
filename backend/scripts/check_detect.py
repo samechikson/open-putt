@@ -7,8 +7,8 @@ Drop the captured putting-green frames into ``backend/tests/fixtures/`` (any
 
 For each fixture it runs ``detect_ball_in_frame`` and writes an annotated copy
 (detected circle + center) plus the white mask alongside it, so you can confirm
-the circle lands on the ball and tune the HSV / circularity constants in
-``app.analyzer._white_mask`` / ``_detect_white_ball``.
+the circle lands on the ball and tune the HSV / circularity / solidity constants
+in ``app.analyzer._white_mask`` / ``_white_ball_candidates``.
 """
 
 import sys

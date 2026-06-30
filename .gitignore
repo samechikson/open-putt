@@ -30,3 +30,7 @@ npm-debug.log*
 *.tsbuildinfo
 
 .claude/
+
+# Local test fixtures (raw clips) and detector debug output
+backend/tests/fixtures/*
+!backend/tests/fixtures/.gitkeep

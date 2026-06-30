@@ -120,66 +120,70 @@ def _white_mask(frame: np.ndarray) -> np.ndarray:
     return mask
 
 
-def _detect_white_ball(
-    frame: np.ndarray,
-    min_r: int,
-    max_r: int,
-    roi: Optional[tuple[int, int, int, int]] = None,  # (x1, y1, x2, y2)
-    near: Optional[tuple[float, float]] = None,
-    center_x: Optional[int] = None,
-) -> Optional[tuple[float, float, float]]:
-    """Locate the white golf ball by colour segmentation.
+# A white-ball candidate: center x, y, enclosing radius, area, circularity.
+Candidate = tuple[float, float, float, float, float]
 
-    Returns the ``(x, y, r)`` of the best white, roughly-circular blob whose
-    enclosing radius falls in ``[min_r, max_r]``. With ``near`` (tracking or a
-    supplied hint) the nearest qualifying blob is chosen; otherwise blobs are
-    scored by size, circularity, and proximity to the expected rest position
-    (``center_x`` and the top of the frame).
+
+def _white_ball_candidates(
+    frame: np.ndarray, min_r: int, max_r: int
+) -> list[Candidate]:
+    """All white blobs that *contain* a ball-sized disc, via distance transform.
+
+    Colour cannot tell a matte-white ball from a polished metal putter shaft
+    (both are low-saturation and bright), and at address the shaft fuses to the
+    ball in the mask — so a contour-shape test (circularity/solidity) rejects the
+    fused blob and loses the ball. Instead, for each connected white component we
+    take the peak of its distance transform: the centre of the largest inscribed
+    circle, with the peak value as its radius. A thin shaft contributes only tiny
+    distances, so this locks onto the round ball and ignores attachments. The
+    remaining ball-vs-hosel ambiguity is resolved by the caller spatially
+    (aim-line corridor) and temporally (velocity-predicted tracking).
     """
     mask = _white_mask(frame)
-    contours, _ = cv2.findContours(
-        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
+    num, labels, stats, _centroids = cv2.connectedComponentsWithStats(mask, 8)
 
-    h, w = frame.shape[:2]
-    # (x, y, r, area, circularity) for each qualifying blob.
-    candidates: list[tuple[float, float, float, float, float]] = []
-    for c in contours:
-        area = float(cv2.contourArea(c))
-        if area <= 0:
+    candidates: list[Candidate] = []
+    for i in range(1, num):  # skip background label 0
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area < min_r * min_r:  # too small to hold a ball; cheap pre-filter
             continue
-        (cx, cy), cr = cv2.minEnclosingCircle(c)
-        if cr < min_r or cr > max_r:
+        comp = (labels == i).astype(np.uint8)
+        dist = cv2.distanceTransform(comp, cv2.DIST_L2, 5)
+        _minv, max_dist, _minl, max_loc = cv2.minMaxLoc(dist)
+        r = float(max_dist)  # radius of the largest inscribed circle
+        if r < min_r or r > max_r:
             continue
-        if roi is not None:
-            x1, y1, x2, y2 = roi
-            if not (x1 <= cx <= x2 and y1 <= cy <= y2):
-                continue
-        perim = cv2.arcLength(c, True)
-        circ = float(4.0 * np.pi * area / (perim * perim)) if perim > 0 else 0.0
-        if circ < 0.6:
-            continue
-        candidates.append((float(cx), float(cy), float(cr), area, circ))
+        candidates.append((float(max_loc[0]), float(max_loc[1]), r, float(area), 1.0))
+    return candidates
 
+
+def _pick_seed(
+    candidates: list[Candidate],
+    w: int,
+    h: int,
+    center_x: Optional[int] = None,
+    half_width: Optional[int] = None,
+) -> Optional[tuple[float, float, float]]:
+    """Cold-start pick of the ball at address.
+
+    Prefers the largest, roundest disc inside the aim-line corridor, breaking
+    ties toward lower blobs — at address the ball sits in front of (below) the
+    putter head and hosel, so the leading white disc is the ball, not the metal
+    behind it.
+    """
     if not candidates:
         return None
-
-    if near is not None:
-        nx, ny = near
-        best = min(candidates, key=lambda c: (c[0] - nx) ** 2 + (c[1] - ny) ** 2)
-        return (best[0], best[1], best[2])
-
-    # Cold seed: favour large, circular blobs near the expected x and toward the
-    # top of the frame, where the ball rests against the putter face.
     bx = float(center_x) if center_x is not None else w / 2.0
+    hw = float(half_width) if half_width else w / 2.0
+    pool = [c for c in candidates if abs(c[0] - bx) <= hw] or candidates
 
-    def score(c: tuple[float, float, float, float, float]) -> float:
+    def score(c: Candidate) -> float:
         x, y, _r, area, circ = c
         x_pref = 1.0 - min(1.0, abs(x - bx) / (w / 2.0))
-        y_pref = 1.0 - (y / h)  # higher near the top
-        return area * circ * (0.5 + 0.5 * x_pref) * (0.5 + 0.5 * y_pref)
+        y_pref = y / h  # favour lower (leading) blobs
+        return area * circ * (0.5 + 0.5 * x_pref) * (0.4 + 0.6 * y_pref)
 
-    best = max(candidates, key=score)
+    best = max(pool, key=score)
     return (best[0], best[1], best[2])
 
 
@@ -240,8 +244,13 @@ def detect_ball_in_frame(
     bottom = lasers[1] if len(lasers) >= 2 else None
 
     # Primary: segment the white ball by colour (robust against grass texture and
-    # independent of the laser dots, which wash out outdoors).
-    best = _detect_white_ball(frame, min_r, max_r, center_x=center_x)
+    # independent of the laser dots, which wash out outdoors). Restrict to the
+    # aim-line corridor and prefer the leading disc so the metallic shaft / hosel
+    # behind the ball is not picked instead.
+    best = _pick_seed(
+        _white_ball_candidates(frame, min_r, max_r),
+        w, h, center_x=center_x, half_width=search_half_width,
+    )
 
     if best is None:
         # Fall back to the old edge-based search (handles low-contrast / indoor
@@ -299,6 +308,8 @@ def analyze_putt(
     ball_r: float = float(ball_radius_hint) if (ball_radius_hint and ball_radius_hint > 0) else 15.0
     last_x: Optional[float] = float(ball_x_hint) if ball_x_hint is not None else None
     last_y: Optional[float] = float(ball_y_hint) if ball_y_hint is not None else None
+    vx: float = 0.0  # ball velocity from the previous step, for prediction
+    vy: float = 0.0
 
     frame_idx = 0
     while True:
@@ -312,36 +323,45 @@ def analyze_putt(
             min_r = max(8, w // 60)
             max_r = max(min_r + 20, w // 5)
 
-        # On the first frame without a supplied hint, seed from the white ball
-        # nearest the top laser dot (the ball rests there) if present, else the
-        # best-scoring blob near the gate center / top of frame.
+        candidates = _white_ball_candidates(frame, min_r, max_r)
+
+        # Keep only blobs inside the corridor around the aim line. The ball stays
+        # near gate_center_x (its offset is what we measure); the putter shaft
+        # enters from the side, so the corridor rejects most of it.
+        corridor_hw = max(gate_width_px, 5.0 * ball_r)
+        in_corridor = [c for c in candidates if abs(c[0] - gate_center_x) <= corridor_hw]
+        pool = in_corridor or candidates
+
+        # On the first frame without a supplied hint, seed on the leading disc.
         if frame_idx == 0 and last_x is None:
-            lasers = _detect_laser_dots(frame)
-            near0 = lasers[0] if lasers else None
-            seed = _detect_white_ball(
-                frame, min_r, max_r, near=near0, center_x=gate_center_x
-            )
+            seed = _pick_seed(pool, w, h, center_x=gate_center_x)
             if seed is not None:
                 last_x, last_y, ball_r = seed[0], seed[1], max(5.0, seed[2])
 
-        near = (last_x, last_y) if last_x is not None and last_y is not None else None
-        det = _detect_white_ball(frame, min_r, max_r, near=near, center_x=gate_center_x)
-
         detected_pos: Optional[tuple[float, float]] = None
-        if det is not None:
-            dx, dy, dr = det
-            # Reject spurious blobs: the ball only grows gradually as it nears the
-            # camera, and never travels backward (away from the gate line) by more
-            # than its own radius.
-            radius_ok = last_y is None or (0.5 * ball_r <= dr <= 2.0 * ball_r)
-            forward_ok = last_y is None or dy >= last_y - ball_r
-            if radius_ok and forward_ok:
-                detected_pos = (dx, dy)
-                ball_r = 0.6 * ball_r + 0.4 * dr  # smooth the growing radius
-                detected_circles.append((dx, dy, dr))
+        if last_x is not None and last_y is not None:
+            # Predict where the ball should be from its velocity, then choose the
+            # blob best matching the prediction. Without prediction the slow/still
+            # putter near the last position outranks a ball that has just been
+            # struck and leapt forward; with it, the moving ball wins.
+            px, py = last_x + vx, last_y + vy
+            reach = max(3.0 * ball_r, (vx * vx + vy * vy) ** 0.5 + 2.0 * ball_r)
+            valid = [
+                c for c in pool
+                if c[1] >= last_y - ball_r                      # never moves backward
+                and 0.5 * ball_r <= c[2] <= 2.0 * ball_r        # radius continuity
+                and ((c[0] - last_x) ** 2 + (c[1] - last_y) ** 2) ** 0.5 <= reach
+            ]
+            if valid:
+                best = min(valid, key=lambda c: (c[0] - px) ** 2 + (c[1] - py) ** 2)
+                detected_pos = (best[0], best[1])
+                ball_r = 0.6 * ball_r + 0.4 * best[2]  # smooth the growing radius
+                detected_circles.append((best[0], best[1], best[2]))
 
         if detected_pos is not None:
             x, y = detected_pos
+            if last_x is not None:
+                vx, vy = x - last_x, y - last_y
             positions.append((x, y))
             last_x, last_y = x, y
 
