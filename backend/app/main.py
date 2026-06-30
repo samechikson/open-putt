@@ -30,6 +30,8 @@ async def analyze(
     ball_radius_hint: int = Form(default=0),
     ball_x_hint: int = Form(default=0),
     ball_y_hint: int = Form(default=0),
+    aim_top_x: int = Form(default=0),
+    aim_top_y: int = Form(default=0),
 ):
     if not video.content_type.startswith("video/"):
         raise HTTPException(status_code=400, detail="File must be a video")
@@ -49,6 +51,8 @@ async def analyze(
             ball_radius_hint=ball_radius_hint or None,
             ball_x_hint=ball_x_hint or None,
             ball_y_hint=ball_y_hint or None,
+            aim_top_x=aim_top_x or None,
+            aim_top_y=aim_top_y or None,
         )
     finally:
         os.unlink(tmp_path)

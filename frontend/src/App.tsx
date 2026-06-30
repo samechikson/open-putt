@@ -533,6 +533,12 @@ function App() {
       fd.append("ball_x_hint", String(Math.round(ballCircle.x)));
       fd.append("ball_y_hint", String(Math.round(ballCircle.y)));
     }
+    // The top laser dot anchors the aim line (ball → target) so the offset is
+    // measured perpendicular to the real putt line rather than vertically.
+    if (laserPoints?.top) {
+      fd.append("aim_top_x", String(Math.round(laserPoints.top[0])));
+      fd.append("aim_top_y", String(Math.round(laserPoints.top[1])));
+    }
     try {
       const res = await fetch("http://localhost:8000/analyze", {
         method: "POST",

@@ -197,24 +197,42 @@ def _make_roi(
     return (x1, y1, x2, y2)
 
 
-def _crossing_x(
-    positions: list[tuple[float, float]], gate_line_y: int
-) -> Optional[tuple[float, float]]:
-    """Interpolate the ball's (x, y) at the moment it crosses the gate line.
+def _aim_crossing(
+    positions: list[tuple[float, float]],
+    ax: float, ay: float, bx: float, by: float,
+) -> Optional[tuple[float, float, tuple[float, float]]]:
+    """Offset of the ball from the aim line A→B as it reaches the target B.
 
-    Scans consecutive tracked points for a sign change in ``y - gate_line_y``
-    and linearly interpolates x at exactly ``y == gate_line_y``. Direction
-    agnostic (works whether the ball travels toward larger or smaller y);
-    returns the first crossing, or None if the track never straddles the line.
+    The aim line runs from the ball-rest dot ``A`` to the target dot ``B``. The
+    "gate" is the line through ``B`` perpendicular to that aim line (not a
+    horizontal line), so a tilted mount is handled correctly. Scans the track for
+    where it crosses that gate — i.e. where progress along the aim direction
+    reaches ``B`` — and returns ``(offset_px, crossing_point)`` where
+    ``offset_px`` is the signed perpendicular distance (positive = right of the
+    aim line, looking from A toward B). Returns None if the track never reaches
+    the gate.
     """
+    ux, uy = bx - ax, by - ay
+    length = (ux * ux + uy * uy) ** 0.5
+    if length == 0:
+        return None
+    ux, uy = ux / length, uy / length  # aim direction (unit)
+    nx, ny = uy, -ux  # right-hand perpendicular (== +x when the aim is vertical)
+
+    def progress(p: tuple[float, float]) -> float:  # signed distance to B along u
+        return (p[0] - bx) * ux + (p[1] - by) * uy
+
+    def offset(cx: float, cy: float) -> float:  # signed perpendicular distance
+        return (cx - bx) * nx + (cy - by) * ny
+
     for (x0, y0), (x1, y1) in zip(positions, positions[1:]):
-        d0 = y0 - gate_line_y
-        d1 = y1 - gate_line_y
-        if d0 == 0:
-            return (x0, y0)
-        if d0 * d1 < 0:  # straddles the gate line
-            t = d0 / (d0 - d1)
-            return (x0 + t * (x1 - x0), float(gate_line_y))
+        s0, s1 = progress((x0, y0)), progress((x1, y1))
+        if s0 == 0:
+            return (offset(x0, y0), (x0, y0))
+        if s0 < 0 <= s1:  # crosses the gate (reaches the target's distance)
+            t = s0 / (s0 - s1)
+            cx, cy = x0 + t * (x1 - x0), y0 + t * (y1 - y0)
+            return (offset(cx, cy), (cx, cy))
     return None
 
 
@@ -295,6 +313,8 @@ def analyze_putt(
     ball_radius_hint: Optional[int] = None,
     ball_x_hint: Optional[int] = None,
     ball_y_hint: Optional[int] = None,
+    aim_top_x: Optional[int] = None,
+    aim_top_y: Optional[int] = None,
 ) -> dict:
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -389,14 +409,30 @@ def analyze_putt(
             "message": "Ball not detected — check calibration values",
         }
 
+    # Aim line: from the ball-rest dot (top laser, ≈ ball address) to the target
+    # dot (gate). Offset is measured perpendicular to this line so a tilted mount
+    # is handled correctly. Fall back to the ball address, then straight-down, so
+    # a missing top dot degrades to the old vertical measurement.
+    if aim_top_x is not None and aim_top_y is not None:
+        ax, ay = float(aim_top_x), float(aim_top_y)
+    elif ball_x_hint is not None and ball_y_hint is not None:
+        ax, ay = float(ball_x_hint), float(ball_y_hint)
+    else:
+        ax, ay = float(gate_center_x), float(gate_line_y) - 100.0
+
     message: Optional[str] = None
-    crossing_pos = _crossing_x(positions, gate_line_y)
-    if crossing_pos is None:
-        # Track never straddled the gate line; estimate from the nearest point.
-        crossing_pos = min(positions, key=lambda p: abs(p[1] - gate_line_y))
+    crossing = _aim_crossing(positions, ax, ay, float(gate_center_x), float(gate_line_y))
+    if crossing is not None:
+        offset_px, crossing_pos = crossing
+    else:
+        # Track never reached the gate; estimate from the furthest-along point.
+        ux, uy = gate_center_x - ax, gate_line_y - ay
+        norm = (ux * ux + uy * uy) ** 0.5 or 1.0
+        ux, uy = ux / norm, uy / norm
+        crossing_pos = max(positions, key=lambda p: (p[0] - ax) * ux + (p[1] - ay) * uy)
+        offset_px = (crossing_pos[0] - gate_center_x) * uy - (crossing_pos[1] - gate_line_y) * ux
         message = "Ball did not cleanly cross gate line — offset is a best-effort estimate"
 
-    offset_px = crossing_pos[0] - gate_center_x
     offset_mm = offset_px * mm_per_px
     direction = "right" if offset_px > 0 else ("left" if offset_px < 0 else "center")
 
