@@ -238,10 +238,13 @@ def detect_ball_in_frame(
     min_r = max(8, w // 60)
     max_r = max(min_r + 20, w // 5)
 
-    # Locate the mount's fixed laser dots: top = ball rest, bottom = target.
+    # Locate the mount's fixed laser dots (sorted top-to-bottom by y). The
+    # bottom-most dot is the target on the green and anchors the gate; it is the
+    # large, reliable dot. The upper ball-rest dot is small and often missing, so
+    # only treat a dot as the ball reference when a second, higher dot is present.
     lasers = _detect_laser_dots(frame)
-    top = lasers[0] if len(lasers) >= 1 else None
-    bottom = lasers[1] if len(lasers) >= 2 else None
+    bottom = lasers[-1] if lasers else None
+    top = lasers[0] if len(lasers) >= 2 else None
 
     # Primary: segment the white ball by colour (robust against grass texture and
     # independent of the laser dots, which wash out outdoors). Restrict to the
