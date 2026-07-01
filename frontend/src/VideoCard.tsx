@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import {
   API_BASE,
   DEFAULT_CAL,
+  golferSide,
   snapFps,
   type AnalysisResult,
   type CalibrationValues,
@@ -12,9 +13,10 @@ interface VideoCardProps {
   file: File;
   index: number;
   onResult: (id: string, result: AnalysisResult | null) => void;
+  onBusyChange: (id: string, busy: boolean) => void;
 }
 
-function VideoCard({ id, file, index, onResult }: VideoCardProps) {
+function VideoCard({ id, file, index, onResult, onBusyChange }: VideoCardProps) {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [videoDims, setVideoDims] = useState<{ w: number; h: number } | null>(
     null,
@@ -38,9 +40,14 @@ function VideoCard({ id, file, index, onResult }: VideoCardProps) {
   const [crossingPos, setCrossingPos] = useState<[number, number] | null>(null);
   const [cal, setCal] = useState<CalibrationValues>(DEFAULT_CAL);
   const [loading, setLoading] = useState(false);
+  const [processing, setProcessing] = useState(false); // detect + fps + analyze
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fps, setFps] = useState(30);
+
+  // "Busy" whenever the backend pipeline (detect/fps/analyze) is in flight, so
+  // the card and the dashboard summary can show a loading indicator.
+  const busy = processing || loading;
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -64,6 +71,9 @@ function VideoCard({ id, file, index, onResult }: VideoCardProps) {
   useEffect(() => {
     ballRef.current = ballCircle;
   }, [ballCircle]);
+  useEffect(() => {
+    onBusyChange(id, busy);
+  }, [busy, id, onBusyChange]);
 
   // Create/revoke the object URL for the file.
   useEffect(() => {
@@ -440,11 +450,16 @@ function VideoCard({ id, file, index, onResult }: VideoCardProps) {
     if (!video || !video.videoWidth) return;
     if (didInitVideo.current) return;
     didInitVideo.current = true;
-    await detectBallInFirstFrame(video, video.videoWidth, video.videoHeight);
-    await measureFps(video);
-    if (!didAutoAnalyze.current) {
-      didAutoAnalyze.current = true;
-      await runAnalysis();
+    setProcessing(true);
+    try {
+      await detectBallInFirstFrame(video, video.videoWidth, video.videoHeight);
+      await measureFps(video);
+      if (!didAutoAnalyze.current) {
+        didAutoAnalyze.current = true;
+        await runAnalysis();
+      }
+    } finally {
+      setProcessing(false);
     }
   };
 
@@ -474,6 +489,14 @@ function VideoCard({ id, file, index, onResult }: VideoCardProps) {
           onLoadedData={handleVideoData}
         />
         <canvas ref={canvasRef} className="cal-canvas" />
+        {busy && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/50 rounded-md">
+            <span className="w-8 h-8 border-[3px] border-[#22c55e] border-t-transparent rounded-full animate-spin" />
+            <span className="text-xs text-[#ddd]">
+              {loading ? "Analyzing…" : "Detecting ball…"}
+            </span>
+          </div>
+        )}
       </div>
 
       <p className={`detect-status ${detectStatus}`}>
@@ -493,9 +516,9 @@ function VideoCard({ id, file, index, onResult }: VideoCardProps) {
                   {Math.abs(result.offset_mm)} mm
                 </div>
                 <p className="text-xs text-[#aaa]">
-                  {result.direction === "center"
+                  {golferSide(result.offset_mm) === "center"
                     ? "on center"
-                    : `${result.direction}`}
+                    : golferSide(result.offset_mm)}
                 </p>
               </div>
               {result.speed_mps != null && (

@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import "./App.css";
 import VideoCard from "./VideoCard";
-import type { AnalysisResult } from "./analysis";
+import { biasWord, golferSide, type AnalysisResult } from "./analysis";
 
 const MAX_VIDEOS = 5;
 
@@ -20,6 +20,7 @@ function App() {
   const [results, setResults] = useState<Record<string, AnalysisResult | null>>(
     {},
   );
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [overflowNote, setOverflowNote] = useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -31,6 +32,7 @@ function App() {
     }));
     setVideos(items);
     setResults({});
+    setBusy({});
     // Allow re-selecting the same files to re-trigger.
     e.target.value = "";
   };
@@ -42,6 +44,10 @@ function App() {
     [],
   );
 
+  const handleBusy = useCallback((id: string, b: boolean) => {
+    setBusy((prev) => (prev[id] === b ? prev : { ...prev, [id]: b }));
+  }, []);
+
   // Aggregate over videos that produced a usable offset.
   const valid = videos
     .map((v) => results[v.id])
@@ -52,11 +58,17 @@ function App() {
     .filter((s): s is number => s != null);
 
   const avgAbsOffset = mean(offsets.map(Math.abs));
-  const bias = mean(offsets); // signed: positive = right, negative = left
+  const bias = mean(offsets); // raw image-space mean; golferSide flips it face-on
   const avgSpeed = mean(speeds);
 
-  const biasDir = bias == null ? "" : bias > 0 ? "right" : bias < 0 ? "left" : "center";
+  const biasSide = bias == null ? "center" : golferSide(bias);
+  const biasLabel = biasWord(biasSide); // "push" (right) / "pull" (left)
   const analyzedCount = valid.length;
+  // A video is still processing while its card reports busy, or before it has
+  // reported any terminal result (undefined = pipeline not finished yet).
+  const anyProcessing = videos.some(
+    (v) => busy[v.id] || results[v.id] === undefined,
+  );
 
   const fmt = (n: number | null, digits = 1) =>
     n == null ? "—" : n.toFixed(digits);
@@ -102,7 +114,11 @@ function App() {
               <h2 className="text-xs font-semibold uppercase tracking-widest text-[#aaa]">
                 Session Averages
               </h2>
-              <span className="text-xs text-[#888]">
+              <span className="text-xs text-[#888] flex items-center gap-2">
+                {anyProcessing && (
+                  <span className="w-3.5 h-3.5 border-2 border-[#22c55e] border-t-transparent rounded-full animate-spin" />
+                )}
+                {anyProcessing ? "Analyzing… " : ""}
                 {analyzedCount} of {videos.length} analyzed
               </span>
             </div>
@@ -118,9 +134,9 @@ function App() {
                 <p className="text-sm text-[#aaa] -mt-1">
                   {bias == null
                     ? "directional bias"
-                    : biasDir === "center"
+                    : biasSide === "center"
                       ? "no directional bias"
-                      : `bias ${biasDir}`}
+                      : `${biasLabel} bias`}
                 </p>
               </div>
               <div>
@@ -141,6 +157,7 @@ function App() {
                 index={i}
                 file={v.file}
                 onResult={handleResult}
+                onBusyChange={handleBusy}
               />
             ))}
           </div>

@@ -33,6 +33,21 @@ export interface AnalysisResult {
   message?: string;
 }
 
+export type Side = "left" | "right" | "center";
+
+// Clips are filmed face-on, which mirrors the image horizontally, so the raw
+// offset sign from the backend (positive = image-right) is the opposite of the
+// golfer's left/right. Flip it to report the golfer's perspective.
+export function golferSide(offsetMm: number): Side {
+  const v = -offsetMm; // undo the face-on mirror
+  return v > 0 ? "right" : v < 0 ? "left" : "center";
+}
+
+// A putt that finishes right of the target is a "push"; left of it, a "pull".
+export function biasWord(side: Side): string {
+  return side === "right" ? "push" : side === "left" ? "pull" : "none";
+}
+
 export const DEFAULT_CAL: CalibrationValues = {
   gateCenterX: 320,
   gateLineY: 400,
