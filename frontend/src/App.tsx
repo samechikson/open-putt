@@ -74,6 +74,10 @@ function App() {
 
   const biasSide = bias == null ? "center" : golferSide(bias);
   const biasLabel = biasWord(biasSide); // "push" (right) / "pull" (left)
+  // Per-putt tallies: right of target = push, left = pull.
+  const sides = offsets.map(golferSide);
+  const pushes = sides.filter((s) => s === "right").length;
+  const pulls = sides.filter((s) => s === "left").length;
   const analyzedCount = valid.length;
   // A video is still processing while its card reports busy, or before it has
   // reported any terminal result (undefined = pipeline not finished yet).
@@ -158,6 +162,14 @@ function App() {
                   speed dispersion (consistency)
                 </p>
               </div>
+            </div>
+            <div className="flex gap-6 mt-4 pt-4 border-t border-[#333] text-sm">
+              <span className="text-[#aaa]">
+                Pushes <span className="text-white font-semibold">{pushes}</span>
+              </span>
+              <span className="text-[#aaa]">
+                Pulls <span className="text-white font-semibold">{pulls}</span>
+              </span>
             </div>
           </div>
         )}
