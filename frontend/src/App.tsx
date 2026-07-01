@@ -15,6 +15,16 @@ function mean(nums: number[]): number | null {
   return nums.reduce((a, b) => a + b, 0) / nums.length;
 }
 
+// Sample standard deviation — the spread of values around their mean. Needs at
+// least two values; a single putt has no dispersion to speak of.
+function stdev(nums: number[]): number | null {
+  if (nums.length < 2) return null;
+  const m = nums.reduce((a, b) => a + b, 0) / nums.length;
+  const variance =
+    nums.reduce((a, b) => a + (b - m) ** 2, 0) / (nums.length - 1);
+  return Math.sqrt(variance);
+}
+
 function App() {
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [results, setResults] = useState<Record<string, AnalysisResult | null>>(
@@ -59,7 +69,8 @@ function App() {
 
   const avgAbsOffset = mean(offsets.map(Math.abs));
   const bias = mean(offsets); // raw image-space mean; golferSide flips it face-on
-  const avgSpeed = mean(speeds);
+  // Spread of gate speeds across putts — how consistent the player's pace is.
+  const speedDispersion = stdev(speeds);
 
   const biasSide = bias == null ? "center" : golferSide(bias);
   const biasLabel = biasWord(biasSide); // "push" (right) / "pull" (left)
@@ -140,8 +151,12 @@ function App() {
                 </p>
               </div>
               <div>
-                <div className="offset-value">{fmt(avgSpeed, 2)} m/s</div>
-                <p className="text-sm text-[#aaa] -mt-1">avg speed at gate</p>
+                <div className="offset-value">
+                  {speedDispersion == null ? "—" : `± ${speedDispersion.toFixed(2)}`} m/s
+                </div>
+                <p className="text-sm text-[#aaa] -mt-1">
+                  speed dispersion (consistency)
+                </p>
               </div>
             </div>
           </div>
