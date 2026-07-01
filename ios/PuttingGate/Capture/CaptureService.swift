@@ -95,7 +95,11 @@ final class CaptureService: NSObject, ObservableObject {
         captureSession.sessionPreset =
             settings.capturePreset == .hd1080 ? .hd1920x1080 : .hd1280x720
 
-        if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+        // Prefer the ultra-wide lens so the preview opens at the 0.5x field of
+        // view; fall back to the standard wide-angle camera on devices without
+        // one (e.g. single-camera iPhones).
+        if let device = AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .back)
+            ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
            let input = try? AVCaptureDeviceInput(device: device),
            captureSession.canAddInput(input) {
             captureSession.addInput(input)
