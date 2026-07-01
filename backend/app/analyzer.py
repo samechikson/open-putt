@@ -211,16 +211,18 @@ def _make_roi(
 def _aim_crossing(
     positions: list[tuple[float, float]],
     ax: float, ay: float, bx: float, by: float,
-) -> Optional[tuple[float, float, tuple[float, float]]]:
+) -> Optional[tuple[float, float, tuple[float, float], int]]:
     """Offset of the ball from the aim line A→B as it reaches the target B.
 
     The aim line runs from the ball-rest dot ``A`` to the target dot ``B``. The
     "gate" is the line through ``B`` perpendicular to that aim line (not a
     horizontal line), so a tilted mount is handled correctly. Scans the track for
     where it crosses that gate — i.e. where progress along the aim direction
-    reaches ``B`` — and returns ``(offset_px, crossing_point)`` where
+    reaches ``B`` — and returns ``(offset_px, crossing_point, seg_index)`` where
     ``offset_px`` is the signed perpendicular distance (positive = right of the
-    aim line, looking from A toward B). Returns None if the track never reaches
+    aim line, looking from A toward B) and ``seg_index`` is the index of the
+    track point at the start of the straddling segment (so the caller can size
+    the gate-crossing speed from it). Returns None if the track never reaches
     the gate.
     """
     ux, uy = bx - ax, by - ay
@@ -236,15 +238,43 @@ def _aim_crossing(
     def offset(cx: float, cy: float) -> float:  # signed perpendicular distance
         return (cx - bx) * nx + (cy - by) * ny
 
-    for (x0, y0), (x1, y1) in zip(positions, positions[1:]):
+    for i, ((x0, y0), (x1, y1)) in enumerate(zip(positions, positions[1:])):
         s0, s1 = progress((x0, y0)), progress((x1, y1))
         if s0 == 0:
-            return (offset(x0, y0), (x0, y0))
+            return (offset(x0, y0), (x0, y0), i)
         if s0 < 0 <= s1:  # crosses the gate (reaches the target's distance)
             t = s0 / (s0 - s1)
             cx, cy = x0 + t * (x1 - x0), y0 + t * (y1 - y0)
-            return (offset(cx, cy), (cx, cy))
+            return (offset(cx, cy), (cx, cy), i)
     return None
+
+
+def _gate_speed_mps(
+    positions: list[tuple[float, float]],
+    position_frames: list[int],
+    seg_index: Optional[int],
+    mm_per_px: float,
+    fps: float,
+) -> Optional[float]:
+    """Ball speed (m/s) across the segment that straddles the gate crossing.
+
+    Uses the px displacement of the two tracked points either side of the gate,
+    scaled by ``mm_per_px`` (valid at the gate plane) and divided by the real
+    elapsed time from their frame indices — so a dropped frame at the gate does
+    not inflate the speed. Returns None when there is no clean crossing segment.
+    """
+    if seg_index is None or seg_index < 0 or seg_index + 1 >= len(positions):
+        return None
+    if fps <= 0:
+        return None
+    (x0, y0), (x1, y1) = positions[seg_index], positions[seg_index + 1]
+    f0, f1 = position_frames[seg_index], position_frames[seg_index + 1]
+    dt = (f1 - f0) / fps
+    if dt <= 0:
+        return None
+    dist_px = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
+    dist_m = dist_px * mm_per_px / 1000.0
+    return dist_m / dt
 
 
 def detect_ball_in_frame(
@@ -326,14 +356,23 @@ def analyze_putt(
     ball_y_hint: Optional[int] = None,
     aim_top_x: Optional[int] = None,
     aim_top_y: Optional[int] = None,
+    fps: Optional[float] = None,
 ) -> dict:
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return {"error": "Could not open video"}
     cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 1)
 
+    # Prefer the frontend-measured fps (more reliable than OpenCV's
+    # CAP_PROP_FPS, which is wrong for some containers); fall back to the
+    # container value, then 30.
+    effective_fps = fps if (fps and fps > 0) else (cap.get(cv2.CAP_PROP_FPS) or 30.0)
+
     mm_per_px = gate_width_mm / gate_width_px
     positions: list[tuple[float, float]] = []
+    # Source-frame index for each detected position, so speed uses real elapsed
+    # time even when the tracker drops a frame.
+    position_frames: list[int] = []
     # Per-frame detected circles, surfaced for the frontend's debug overlay.
     detected_circles: list[tuple[float, float, float]] = []
 
@@ -397,6 +436,7 @@ def analyze_putt(
             if last_x is not None:
                 vx, vy = x - last_x, y - last_y
             positions.append((x, y))
+            position_frames.append(frame_idx)
             last_x, last_y = x, y
 
         frame_idx += 1
@@ -417,6 +457,7 @@ def analyze_putt(
             "positions": serialized,
             "hough_circles": serialized_hough,
             "crossing_pos": None,
+            "speed_mps": None,
             "message": "Ball not detected — check calibration values",
         }
 
@@ -432,9 +473,10 @@ def analyze_putt(
         ax, ay = float(gate_center_x), float(gate_line_y) - 100.0
 
     message: Optional[str] = None
+    seg_index: Optional[int] = None
     crossing = _aim_crossing(positions, ax, ay, float(gate_center_x), float(gate_line_y))
     if crossing is not None:
-        offset_px, crossing_pos = crossing
+        offset_px, crossing_pos, seg_index = crossing
     else:
         # Track never reached the gate; estimate from the furthest-along point.
         ux, uy = gate_center_x - ax, gate_line_y - ay
@@ -447,6 +489,11 @@ def analyze_putt(
     offset_mm = offset_px * mm_per_px
     direction = "right" if offset_px > 0 else ("left" if offset_px < 0 else "center")
 
+    # Speed at the moment the ball crosses the gate, where mm_per_px is valid.
+    speed_mps = _gate_speed_mps(
+        positions, position_frames, seg_index, mm_per_px, effective_fps
+    )
+
     result = {
         "offset_px": round(offset_px, 1),
         "offset_mm": round(offset_mm, 2),
@@ -455,6 +502,7 @@ def analyze_putt(
         "positions": serialized,
         "hough_circles": serialized_hough,
         "crossing_pos": [round(crossing_pos[0], 1), round(crossing_pos[1], 1)],
+        "speed_mps": round(speed_mps, 2) if speed_mps is not None else None,
     }
     if message is not None:
         result["message"] = message

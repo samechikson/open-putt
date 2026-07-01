@@ -37,6 +37,7 @@ interface AnalysisResult {
   positions: [number, number][];
   hough_circles?: [number, number, number][]; // [x, y, r] in source-video px
   crossing_pos: [number, number] | null;
+  speed_mps?: number | null; // ball speed at the gate crossing
   message?: string;
 }
 
@@ -539,6 +540,9 @@ function App() {
       fd.append("aim_top_x", String(Math.round(laserPoints.top[0])));
       fd.append("aim_top_y", String(Math.round(laserPoints.top[1])));
     }
+    // The measured frame rate lets the backend turn the per-frame ball
+    // displacement into a real speed (m/s) at the gate.
+    fd.append("fps", String(fps));
     try {
       const res = await fetch("http://localhost:8000/analyze", {
         method: "POST",
@@ -731,6 +735,14 @@ function App() {
                     </div>
                   ) : (
                     <p className="text-sm text-[#888]">No offset measured</p>
+                  )}
+                  {result.speed_mps != null && (
+                    <div className="mt-3 pt-3 border-t border-[#333]">
+                      <div className="offset-value">{result.speed_mps} m/s</div>
+                      <p className="text-sm text-[#aaa] -mt-1">
+                        speed at the gate
+                      </p>
+                    </div>
                   )}
                   <p className="text-xs text-[#888] mt-2">
                     Frames with ball detected: {result.track_count}

@@ -32,6 +32,7 @@ async def analyze(
     ball_y_hint: int = Form(default=0),
     aim_top_x: int = Form(default=0),
     aim_top_y: int = Form(default=0),
+    fps: float = Form(default=0.0),
 ):
     if not video.content_type.startswith("video/"):
         raise HTTPException(status_code=400, detail="File must be a video")
@@ -53,6 +54,7 @@ async def analyze(
             ball_y_hint=ball_y_hint or None,
             aim_top_x=aim_top_x or None,
             aim_top_y=aim_top_y or None,
+            fps=fps or None,
         )
     finally:
         os.unlink(tmp_path)
