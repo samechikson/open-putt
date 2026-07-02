@@ -2,29 +2,25 @@ import SwiftUI
 import SwiftData
 
 struct HistoryView: View {
-    @EnvironmentObject private var coordinator: SessionCoordinator
+    @EnvironmentObject private var coordinator: RecordingCoordinator
     @Environment(\.modelContext) private var context
-    @Query(sort: \Session.startedAt, order: .reverse) private var sessions: [Session]
+    @Query(sort: \Recording.capturedAt, order: .reverse) private var recordings: [Recording]
 
     var body: some View {
         NavigationStack {
             Group {
-                if sessions.isEmpty {
+                if recordings.isEmpty {
                     ContentUnavailableView(
-                        "No sessions yet",
-                        systemImage: "list.bullet",
-                        description: Text("Recorded putts will appear here.")
+                        "No recordings yet",
+                        systemImage: "video",
+                        description: Text("Recorded videos will appear here.")
                     )
                 } else {
                     List {
-                        ForEach(sessions) { session in
-                            NavigationLink {
-                                ClipListView(session: session)
-                            } label: {
-                                sessionRow(session)
-                            }
+                        ForEach(recordings) { recording in
+                            recordingRow(recording)
                         }
-                        .onDelete(perform: deleteSessions)
+                        .onDelete(perform: deleteRecordings)
                     }
                 }
             }
@@ -32,62 +28,25 @@ struct HistoryView: View {
         }
     }
 
-    private func sessionRow(_ session: Session) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(session.name).font(.headline)
-            HStack(spacing: 8) {
-                Text("\(session.clips.count) putt\(session.clips.count == 1 ? "" : "s")")
-                let pending = session.clips.filter { $0.uploadState != .uploaded }.count
-                if pending > 0 {
-                    Text("\(pending) to upload").foregroundStyle(.orange)
-                } else if !session.clips.isEmpty {
-                    Text("Uploaded").foregroundStyle(.green)
+    private func recordingRow(_ recording: Recording) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(recording.capturedAt, format: .dateTime.month().day().hour().minute())
+                    .font(.headline)
+                Text(String(format: "%.1fs", recording.duration))
+                    .font(.caption).foregroundStyle(.secondary)
+                if let error = recording.lastUploadError, recording.uploadState == .failed {
+                    Text(error).font(.caption2).foregroundStyle(.red)
                 }
             }
-            .font(.caption)
+            Spacer()
+            uploadBadge(recording)
         }
-    }
-
-    private func deleteSessions(at offsets: IndexSet) {
-        for index in offsets {
-            let session = sessions[index]
-            for clip in session.clips {
-                try? FileManager.default.removeItem(at: clip.fileURL)
-            }
-            context.delete(session)
-        }
-        try? context.save()
-    }
-}
-
-struct ClipListView: View {
-    @EnvironmentObject private var coordinator: SessionCoordinator
-    let session: Session
-
-    var body: some View {
-        List {
-            ForEach(session.orderedClips) { clip in
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Putt \(clip.clipIndex + 1)").font(.headline)
-                        Text(String(format: "%.1fs", clip.duration))
-                            .font(.caption).foregroundStyle(.secondary)
-                        if let error = clip.lastUploadError, clip.uploadState == .failed {
-                            Text(error).font(.caption2).foregroundStyle(.red)
-                        }
-                    }
-                    Spacer()
-                    uploadBadge(clip)
-                }
-            }
-        }
-        .navigationTitle(session.name)
-        .navigationBarTitleDisplayMode(.inline)
     }
 
     @ViewBuilder
-    private func uploadBadge(_ clip: Clip) -> some View {
-        switch clip.uploadState {
+    private func uploadBadge(_ recording: Recording) -> some View {
+        switch recording.uploadState {
         case .uploaded:
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
         case .uploading:
@@ -96,11 +55,20 @@ struct ClipListView: View {
             Image(systemName: "clock").foregroundStyle(.secondary)
         case .failed:
             Button {
-                coordinator.uploads.upload(clip)
+                coordinator.uploads.upload(recording)
             } label: {
                 Label("Retry", systemImage: "arrow.clockwise")
             }
             .buttonStyle(.bordered)
         }
+    }
+
+    private func deleteRecordings(at offsets: IndexSet) {
+        for index in offsets {
+            let recording = recordings[index]
+            try? FileManager.default.removeItem(at: recording.fileURL)
+            context.delete(recording)
+        }
+        try? context.save()
     }
 }

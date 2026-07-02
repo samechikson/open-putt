@@ -25,29 +25,3 @@ struct CameraPreview: UIViewRepresentable {
         }
     }
 }
-
-/// A static, purely cosmetic gate guide drawn over the preview. The real gate
-/// geometry is decided later on the backend, so this is only an aiming aid.
-struct GateOverlay: View {
-    var body: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            let h = geo.size.height
-            ZStack {
-                // Vertical center line.
-                Rectangle()
-                    .fill(Color.green.opacity(0.7))
-                    .frame(width: 2, height: h)
-                    .position(x: w / 2, y: h / 2)
-
-                // Gate marker near the lower third.
-                HStack(spacing: w * 0.16) {
-                    Capsule().fill(Color.green).frame(width: 4, height: 28)
-                    Capsule().fill(Color.green).frame(width: 4, height: 28)
-                }
-                .position(x: w / 2, y: h * 0.66)
-            }
-            .allowsHitTesting(false)
-        }
-    }
-}

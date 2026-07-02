@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 
-/// The lifecycle of a clip's upload to the backend.
+/// The lifecycle of a recording's upload to the backend.
 enum UploadState: String, Codable {
     case pending
     case uploading
@@ -9,39 +9,33 @@ enum UploadState: String, Codable {
     case failed
 }
 
-/// A single auto-recorded putt clip stored on disk and uploaded to the backend.
+/// A single video recorded by the user and uploaded to the backend for
+/// processing. The app itself does no analysis — it just records and sends.
 @Model
-final class Clip {
+final class Recording {
     @Attribute(.unique) var id: UUID
 
-    /// Filename (not absolute path) within the app's Documents directory.
+    /// Filename (not absolute path) within the app's Recordings directory.
     /// Stored relative so it survives container path changes between launches.
     var fileName: String
 
     var capturedAt: Date
     var duration: Double
 
-    /// Index of this clip within its session (0-based, in capture order).
-    var clipIndex: Int
-
     var uploadStateRaw: String
     var uploadAttempts: Int
     var lastUploadError: String?
-
-    var session: Session?
 
     init(
         id: UUID = UUID(),
         fileName: String,
         capturedAt: Date = .now,
-        duration: Double = 0,
-        clipIndex: Int = 0
+        duration: Double = 0
     ) {
         self.id = id
         self.fileName = fileName
         self.capturedAt = capturedAt
         self.duration = duration
-        self.clipIndex = clipIndex
         self.uploadStateRaw = UploadState.pending.rawValue
         self.uploadAttempts = 0
         self.lastUploadError = nil
@@ -52,20 +46,20 @@ final class Clip {
         set { uploadStateRaw = newValue.rawValue }
     }
 
-    /// Absolute URL of the clip on disk, resolved against the current
+    /// Absolute URL of the recording on disk, resolved against the current
     /// Documents directory.
     var fileURL: URL {
-        Clip.clipsDirectory.appendingPathComponent(fileName)
+        Recording.recordingsDirectory.appendingPathComponent(fileName)
     }
 
     var fileExists: Bool {
         FileManager.default.fileExists(atPath: fileURL.path)
     }
 
-    /// Directory where clips are stored: <Documents>/Clips.
-    static var clipsDirectory: URL {
+    /// Directory where recordings are stored: <Documents>/Recordings.
+    static var recordingsDirectory: URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let dir = docs.appendingPathComponent("Clips", isDirectory: true)
+        let dir = docs.appendingPathComponent("Recordings", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }

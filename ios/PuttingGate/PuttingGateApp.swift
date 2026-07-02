@@ -6,12 +6,12 @@ struct PuttingGateApp: App {
 
     private let modelContainer: ModelContainer
     @StateObject private var settings: AppSettings
-    @StateObject private var coordinator: SessionCoordinator
+    @StateObject private var coordinator: RecordingCoordinator
 
     init() {
         let container: ModelContainer
         do {
-            container = try ModelContainer(for: Session.self, Clip.self)
+            container = try ModelContainer(for: Recording.self)
         } catch {
             fatalError("Failed to create ModelContainer: \(error)")
         }
@@ -19,9 +19,9 @@ struct PuttingGateApp: App {
 
         let settings = AppSettings()
         let uploads = UploadService(settings: settings, modelContainer: container)
-        let capture = CaptureService(settings: settings)
-        let coordinator = SessionCoordinator(
-            capture: capture, uploads: uploads, modelContainer: container
+        let recorder = CameraRecorder(settings: settings)
+        let coordinator = RecordingCoordinator(
+            recorder: recorder, uploads: uploads, modelContainer: container
         )
 
         _settings = StateObject(wrappedValue: settings)
@@ -33,17 +33,18 @@ struct PuttingGateApp: App {
             RootView()
                 .environmentObject(settings)
                 .environmentObject(coordinator)
+                .environmentObject(coordinator.recorder)
                 .modelContainer(modelContainer)
         }
     }
 }
 
 struct RootView: View {
-    @EnvironmentObject private var coordinator: SessionCoordinator
+    @EnvironmentObject private var coordinator: RecordingCoordinator
 
     var body: some View {
         TabView {
-            SessionView()
+            RecordView()
                 .tabItem { Label("Record", systemImage: "video.fill") }
             HistoryView()
                 .tabItem { Label("History", systemImage: "list.bullet") }
@@ -51,7 +52,7 @@ struct RootView: View {
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
         }
         .onAppear {
-            coordinator.capture.start()
+            coordinator.recorder.start()
             // Resume any uploads left pending from a previous launch.
             coordinator.uploads.uploadPending()
         }

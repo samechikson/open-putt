@@ -2,7 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject private var settings: AppSettings
-    @EnvironmentObject private var coordinator: SessionCoordinator
+    @EnvironmentObject private var coordinator: RecordingCoordinator
 
     var body: some View {
         NavigationStack {
@@ -27,27 +27,6 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("Motion detection") {
-                    sliderRow("Sensitivity", value: $settings.motionThreshold,
-                              range: 0.01...0.2, format: "%.3f",
-                              hint: "Lower triggers more easily")
-                    sliderRow("Cooldown (s)", value: $settings.cooldownSeconds,
-                              range: 0.5...5, format: "%.1f",
-                              hint: "Gap enforced between clips")
-                }
-
-                Section("Clip timing") {
-                    sliderRow("Pre-roll (s)", value: $settings.preRollSeconds,
-                              range: 0...3, format: "%.1f",
-                              hint: "Footage kept before motion")
-                    sliderRow("Post-roll (s)", value: $settings.postRollSeconds,
-                              range: 0...3, format: "%.1f",
-                              hint: "Footage kept after motion stops")
-                    sliderRow("Max clip (s)", value: $settings.maxClipSeconds,
-                              range: 2...20, format: "%.0f",
-                              hint: "Safety cap on clip length")
-                }
-
                 Section("Capture") {
                     Picker("Resolution", selection: $settings.capturePresetRaw) {
                         ForEach(CapturePreset.allCases) { preset in
@@ -57,22 +36,6 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
-        }
-    }
-
-    private func sliderRow(
-        _ title: String, value: Binding<Double>,
-        range: ClosedRange<Double>, format: String, hint: String
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Text(title)
-                Spacer()
-                Text(String(format: format, value.wrappedValue))
-                    .foregroundStyle(.secondary).monospacedDigit()
-            }
-            Slider(value: value, in: range)
-            Text(hint).font(.caption2).foregroundStyle(.secondary)
         }
     }
 }
