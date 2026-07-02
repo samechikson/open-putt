@@ -11,8 +11,9 @@ final class AppSettings: ObservableObject {
     /// Base URL of the backend, e.g. "http://192.168.1.20:8000".
     @AppStorage("backendBaseURL") var backendBaseURL: String = ""
 
-    /// Path appended to the base URL for video uploads.
-    @AppStorage("uploadPath") var uploadPath: String = "/upload"
+    /// Path appended to the base URL for video uploads. Points at the
+    /// multi-putt session analyzer, which persists the session and its putts.
+    @AppStorage("uploadPath") var uploadPath: String = "/analyze-session"
 
     // MARK: Capture
 

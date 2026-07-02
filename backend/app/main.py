@@ -1,9 +1,15 @@
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+import logging
 import tempfile
 import os
+import uuid
+from typing import Optional
 from .analyzer import CalibrationError, analyze_putt, analyze_session, detect_ball_in_frame
+from .db import persist_session
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Putting Gate Analyzer")
 
@@ -68,11 +74,20 @@ async def analyze_session_endpoint(
     gate_width_px: int = Form(default=0),
     gate_width_mm: float = Form(default=0.0),
     fps: float = Form(default=0.0),
+    # Optional iOS Recording metadata; when present the session is persisted.
+    recording_id: Optional[str] = Form(default=None),
+    captured_at: Optional[str] = Form(default=None),
+    duration: Optional[float] = Form(default=None),
+    length_feet: Optional[int] = Form(default=None),
+    break_type: Optional[str] = Form(default=None),
+    user_id: Optional[str] = Form(default=None),
 ):
     """Analyze a video containing multiple putts.
 
     Calibration is derived from the laser dots and the resting ball on a quiet
-    frame; pass both gate_width fields to override the mm-per-px scale.
+    frame; pass both gate_width fields to override the mm-per-px scale. When the
+    optional iOS metadata fields are supplied, the session and its putts are
+    persisted to Supabase and the session id is echoed back.
     """
     if not video.content_type.startswith("video/"):
         raise HTTPException(status_code=400, detail="File must be a video")
@@ -98,6 +113,28 @@ async def analyze_session_endpoint(
 
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
+
+    # Persist after a successful analysis. A DB failure must not break the
+    # response, so log and continue.
+    session_id = recording_id or str(uuid.uuid4())
+    try:
+        persisted = persist_session(
+            session_id=session_id,
+            metadata={
+                "user_id": user_id,
+                "file_name": video.filename,
+                "captured_at": captured_at,
+                "ios_duration_s": duration,
+                "length_feet": length_feet,
+                "break_type": break_type,
+            },
+            result=result,
+        )
+        if persisted is not None:
+            result["session_id"] = persisted
+    except Exception:  # noqa: BLE001 — persistence is best-effort
+        logger.exception("Failed to persist session %s", session_id)
+
     return JSONResponse(result)
 
 
