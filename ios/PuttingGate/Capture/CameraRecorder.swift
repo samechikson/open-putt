@@ -83,6 +83,7 @@ final class CameraRecorder: NSObject, ObservableObject {
            let input = try? AVCaptureDeviceInput(device: device),
            captureSession.canAddInput(input) {
             captureSession.addInput(input)
+            configureExposure(device)
         }
 
         if captureSession.canAddOutput(movieOutput) {
@@ -93,6 +94,28 @@ final class CameraRecorder: NSObject, ObservableObject {
             connection.videoRotationAngle = 90 // portrait
         }
         captureSession.commitConfiguration()
+    }
+
+    /// Underexpose slightly. Bright outdoor scenes otherwise overexpose the
+    /// white ball and green, washing out the detail the backend needs; a
+    /// lower exposure keeps highlights intact. Auto-exposure still tracks the
+    /// scene — it just aims a couple of stops darker.
+    private static let exposureBiasEV: Float = -2.0
+
+    private func configureExposure(_ device: AVCaptureDevice) {
+        do {
+            try device.lockForConfiguration()
+            if device.isExposureModeSupported(.continuousAutoExposure) {
+                device.exposureMode = .continuousAutoExposure
+            }
+            // Clamp into the device's supported range.
+            let bias = max(device.minExposureTargetBias,
+                           min(device.maxExposureTargetBias, Self.exposureBiasEV))
+            device.setExposureTargetBias(bias)
+            device.unlockForConfiguration()
+        } catch {
+            // Non-fatal: fall back to the default auto-exposure.
+        }
     }
 
     // MARK: Recording control
