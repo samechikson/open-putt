@@ -31,10 +31,12 @@ struct HistoryView: View {
     private func recordingRow(_ recording: Recording) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(recording.capturedAt, format: .dateTime.month().day().hour().minute())
+                Text("\(recording.lengthFeet) ft · \(recording.breakType.displayName)")
                     .font(.headline)
-                Text(String(format: "%.1fs", recording.duration))
+                Text(recording.capturedAt, format: .dateTime.month().day().hour().minute())
                     .font(.caption).foregroundStyle(.secondary)
+                Text(String(format: "%.1fs", recording.duration))
+                    .font(.caption2).foregroundStyle(.secondary)
                 if let error = recording.lastUploadError, recording.uploadState == .failed {
                     Text(error).font(.caption2).foregroundStyle(.red)
                 }

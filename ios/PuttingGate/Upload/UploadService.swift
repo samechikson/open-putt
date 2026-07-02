@@ -103,6 +103,8 @@ final class UploadService: NSObject, ObservableObject {
         writeField("recording_id", recording.id.uuidString)
         writeField("captured_at", ISO8601DateFormatter().string(from: recording.capturedAt))
         writeField("duration", String(recording.duration))
+        writeField("length_feet", String(recording.lengthFeet))
+        writeField("break_type", recording.breakTypeRaw)
 
         // File part.
         var header = "--\(boundary)\r\n"

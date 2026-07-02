@@ -22,6 +22,11 @@ final class Recording {
     var capturedAt: Date
     var duration: Double
 
+    /// User-entered length of the putt, in feet.
+    var lengthFeet: Int = 9
+    /// User-selected slope + break direction (raw value of `PuttBreak`).
+    var breakTypeRaw: String = PuttBreak.straight.rawValue
+
     var uploadStateRaw: String
     var uploadAttempts: Int
     var lastUploadError: String?
@@ -30,12 +35,16 @@ final class Recording {
         id: UUID = UUID(),
         fileName: String,
         capturedAt: Date = .now,
-        duration: Double = 0
+        duration: Double = 0,
+        lengthFeet: Int = 9,
+        breakType: PuttBreak = .straight
     ) {
         self.id = id
         self.fileName = fileName
         self.capturedAt = capturedAt
         self.duration = duration
+        self.lengthFeet = lengthFeet
+        self.breakTypeRaw = breakType.rawValue
         self.uploadStateRaw = UploadState.pending.rawValue
         self.uploadAttempts = 0
         self.lastUploadError = nil
@@ -44,6 +53,11 @@ final class Recording {
     var uploadState: UploadState {
         get { UploadState(rawValue: uploadStateRaw) ?? .pending }
         set { uploadStateRaw = newValue.rawValue }
+    }
+
+    var breakType: PuttBreak {
+        get { PuttBreak(rawValue: breakTypeRaw) ?? .straight }
+        set { breakTypeRaw = newValue.rawValue }
     }
 
     /// Absolute URL of the recording on disk, resolved against the current

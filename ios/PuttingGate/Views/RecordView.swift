@@ -3,12 +3,19 @@ import SwiftUI
 struct RecordView: View {
     @EnvironmentObject private var recorder: CameraRecorder
 
+    @State private var lengthFeet = 9
+    @State private var breakType: PuttBreak = .straight
+    @State private var showLengthPicker = false
+
+    private let lengthRange = Array(stride(from: 3, through: 60, by: 3))
+
     var body: some View {
         ZStack {
             CameraPreview(session: recorder.captureSession)
                 .ignoresSafeArea()
 
             VStack {
+                puttInfoBar
                 if recorder.isRecording {
                     recordingIndicator
                 }
@@ -21,7 +28,68 @@ struct RecordView: View {
                 permissionOverlay
             }
         }
+        .sheet(isPresented: $showLengthPicker) { lengthPickerSheet }
     }
+
+    // MARK: Putt info
+
+    private var puttInfoBar: some View {
+        HStack(spacing: 10) {
+            Button {
+                showLengthPicker = true
+            } label: {
+                infoField(label: "Length", value: "\(lengthFeet) ft")
+            }
+
+            Menu {
+                Picker("Break", selection: $breakType) {
+                    ForEach(PuttBreak.allCases) { type in
+                        Text(type.displayName).tag(type)
+                    }
+                }
+            } label: {
+                infoField(label: "Break", value: breakType.displayName)
+            }
+        }
+        .disabled(recorder.isRecording)
+        .opacity(recorder.isRecording ? 0.5 : 1)
+    }
+
+    private func infoField(label: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label.uppercased())
+                .font(.caption2).foregroundStyle(.secondary)
+            Text(value)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var lengthPickerSheet: some View {
+        NavigationStack {
+            Picker("Length", selection: $lengthFeet) {
+                ForEach(lengthRange, id: \.self) { feet in
+                    Text("\(feet) ft").tag(feet)
+                }
+            }
+            .pickerStyle(.wheel)
+            .navigationTitle("Putt length")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showLengthPicker = false }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    // MARK: Recording controls
 
     private var recordingIndicator: some View {
         HStack(spacing: 8) {
@@ -37,7 +105,7 @@ struct RecordView: View {
             if recorder.isRecording {
                 recorder.stopRecording()
             } else {
-                recorder.startRecording()
+                recorder.startRecording(lengthFeet: lengthFeet, breakType: breakType)
             }
         } label: {
             ZStack {

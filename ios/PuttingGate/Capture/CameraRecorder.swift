@@ -12,8 +12,10 @@ final class CameraRecorder: NSObject, ObservableObject {
     @Published private(set) var isRecording = false
     @Published private(set) var permissionDenied = false
 
-    /// Called on the main actor when a recording finishes writing.
-    var onRecordingFinished: ((_ fileURL: URL, _ capturedAt: Date, _ duration: Double) -> Void)?
+    /// Called on the main actor when a recording finishes writing, along with
+    /// the putt metadata that was set when recording started.
+    var onRecordingFinished: ((_ fileURL: URL, _ capturedAt: Date, _ duration: Double,
+                               _ lengthFeet: Int, _ breakType: PuttBreak) -> Void)?
 
     let captureSession = AVCaptureSession()
 
@@ -24,6 +26,9 @@ final class CameraRecorder: NSObject, ObservableObject {
     private var configured = false
     /// When the in-flight recording began, so we can timestamp the file.
     private var recordingStartedAt: Date?
+    /// Putt metadata captured at the moment recording started.
+    private var pendingLengthFeet = 9
+    private var pendingBreakType: PuttBreak = .straight
 
     init(settings: AppSettings) {
         self.settings = settings
@@ -92,13 +97,15 @@ final class CameraRecorder: NSObject, ObservableObject {
 
     // MARK: Recording control
 
-    func startRecording() {
+    func startRecording(lengthFeet: Int, breakType: PuttBreak) {
         sessionQueue.async { [weak self] in
             guard let self, self.captureSession.isRunning, !self.movieOutput.isRecording else { return }
             let fileName = "recording-\(UUID().uuidString).mov"
             let url = Recording.recordingsDirectory.appendingPathComponent(fileName)
             try? FileManager.default.removeItem(at: url)
             self.recordingStartedAt = .now
+            self.pendingLengthFeet = lengthFeet
+            self.pendingBreakType = breakType
             self.movieOutput.startRecording(to: url, recordingDelegate: self)
         }
     }
@@ -142,10 +149,12 @@ extension CameraRecorder: AVCaptureFileOutputRecordingDelegate {
 
         let asset = AVURLAsset(url: outputFileURL)
         let duration = CMTimeGetSeconds(asset.duration)
+        let lengthFeet = pendingLengthFeet
+        let breakType = pendingBreakType
 
         DispatchQueue.main.async {
             self.isRecording = false
-            self.onRecordingFinished?(outputFileURL, capturedAt, max(0, duration))
+            self.onRecordingFinished?(outputFileURL, capturedAt, max(0, duration), lengthFeet, breakType)
         }
     }
 }
