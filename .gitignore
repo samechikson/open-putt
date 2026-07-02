@@ -26,6 +26,10 @@ npm-debug.log*
 .vscode/
 .idea/
 
+# Xcode per-user state
+xcuserdata/
+*.xcuserstate
+
 # TypeScript
 *.tsbuildinfo
 
