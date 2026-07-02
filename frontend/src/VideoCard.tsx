@@ -3,7 +3,7 @@ import {
   API_BASE,
   DEFAULT_CAL,
   golferSide,
-  snapFps,
+  measureVideoFps,
   type AnalysisResult,
   type CalibrationValues,
 } from "./analysis";
@@ -394,53 +394,10 @@ function VideoCard({ id, file, index, onResult, onBusyChange }: VideoCardProps) 
     syncCanvasSize();
   };
 
-  // Estimate the clip's frame rate by briefly (muted) playing it and measuring
-  // the gap between presented frames via requestVideoFrameCallback. Falls back
-  // to the current fps if the API is unavailable or measurement fails.
-  const measureFps = useCallback((video: HTMLVideoElement) => {
-    return new Promise<void>((resolve) => {
-      if (!("requestVideoFrameCallback" in video)) {
-        resolve();
-        return;
-      }
-      const deltas: number[] = [];
-      let lastMediaTime: number | null = null;
-      const finish = () => {
-        const positive = deltas.filter((d) => d > 0).sort((a, b) => a - b);
-        if (positive.length) {
-          const median = positive[Math.floor(positive.length / 2)];
-          if (median > 0) setFps(snapFps(1 / median));
-        }
-        video.pause();
-        const onSeeked = () => {
-          video.removeEventListener("seeked", onSeeked);
-          resolve();
-        };
-        video.addEventListener("seeked", onSeeked);
-        video.currentTime = 0;
-      };
-      const onFrame: VideoFrameRequestCallback = (_now, metadata) => {
-        if (lastMediaTime !== null)
-          deltas.push(metadata.mediaTime - lastMediaTime);
-        lastMediaTime = metadata.mediaTime;
-        if (deltas.length >= 15) {
-          finish();
-        } else {
-          video.requestVideoFrameCallback(onFrame);
-        }
-      };
-      const prevMuted = video.muted;
-      video.muted = true;
-      video
-        .play()
-        .then(() => {
-          video.requestVideoFrameCallback(onFrame);
-        })
-        .catch(() => {
-          video.muted = prevMuted;
-          resolve();
-        });
-    });
+  // Falls back to the current fps if the measurement fails.
+  const measureFps = useCallback(async (video: HTMLVideoElement) => {
+    const measured = await measureVideoFps(video);
+    if (measured != null) setFps(measured);
   }, []);
 
   // On load: detect the ball + lasers, measure fps, then auto-run the analysis

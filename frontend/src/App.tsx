@@ -1,7 +1,13 @@
 import { useState, useCallback } from "react";
 import "./App.css";
 import VideoCard from "./VideoCard";
-import { biasWord, golferSide, type AnalysisResult } from "./analysis";
+import SessionCard from "./SessionCard";
+import {
+  biasWord,
+  golferSide,
+  type AnalysisResult,
+  type SessionResult,
+} from "./analysis";
 
 const MAX_VIDEOS = 5;
 
@@ -32,6 +38,16 @@ function App() {
   );
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [overflowNote, setOverflowNote] = useState(false);
+  // Session mode: one video holding several putts, split up by the backend.
+  // The two upload paths are alternatives, so picking one clears the other.
+  const [session, setSession] = useState<{ id: string; file: File } | null>(
+    null,
+  );
+  // undefined = pipeline not finished yet, null = it failed (like `results`).
+  const [sessionResult, setSessionResult] = useState<
+    SessionResult | null | undefined
+  >(undefined);
+  const [sessionBusy, setSessionBusy] = useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -43,7 +59,25 @@ function App() {
     setVideos(items);
     setResults({});
     setBusy({});
+    setSession(null);
+    setSessionResult(undefined);
+    setSessionBusy(false);
     // Allow re-selecting the same files to re-trigger.
+    e.target.value = "";
+  };
+
+  const handleSessionFileChange = (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setSession({ id: `${Date.now()}-${file.name}`, file });
+    setSessionResult(undefined);
+    setSessionBusy(false);
+    setVideos([]);
+    setResults({});
+    setBusy({});
+    setOverflowNote(false);
     e.target.value = "";
   };
 
@@ -58,10 +92,22 @@ function App() {
     setBusy((prev) => (prev[id] === b ? prev : { ...prev, [id]: b }));
   }, []);
 
-  // Aggregate over videos that produced a usable offset.
-  const valid = videos
-    .map((v) => results[v.id])
-    .filter((r): r is AnalysisResult => !!r && r.offset_mm !== null);
+  const handleSessionResult = useCallback((result: SessionResult | null) => {
+    setSessionResult(result);
+  }, []);
+
+  const handleSessionBusy = useCallback((b: boolean) => {
+    setSessionBusy(b);
+  }, []);
+
+  // Aggregate over putts that produced a usable offset — the per-video results
+  // in single-putt mode, or the putts split out of the session video.
+  const candidates: (AnalysisResult | null | undefined)[] = session
+    ? (sessionResult?.putts ?? [])
+    : videos.map((v) => results[v.id]);
+  const valid = candidates.filter(
+    (r): r is AnalysisResult => !!r && r.offset_mm !== null,
+  );
   const offsets = valid.map((r) => r.offset_mm as number);
   const speeds = valid
     .map((r) => r.speed_mps)
@@ -81,9 +127,10 @@ function App() {
   const analyzedCount = valid.length;
   // A video is still processing while its card reports busy, or before it has
   // reported any terminal result (undefined = pipeline not finished yet).
-  const anyProcessing = videos.some(
-    (v) => busy[v.id] || results[v.id] === undefined,
-  );
+  const anyProcessing = session
+    ? sessionBusy || sessionResult === undefined
+    : videos.some((v) => busy[v.id] || results[v.id] === undefined);
+  const haveUploads = videos.length > 0 || session !== null;
 
   const fmt = (n: number | null, digits = 1) =>
     n == null ? "—" : n.toFixed(digits);
@@ -95,35 +142,58 @@ function App() {
           Putting Gate Dashboard
         </h1>
         <p className="text-sm text-[#888] mb-6">
-          Upload up to {MAX_VIDEOS} putts — analysis runs automatically
+          Upload one clip per putt, or a single video of the whole session —
+          analysis runs automatically
         </p>
 
-        {/* Upload */}
-        <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5 mb-6">
-          <h2 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-3">
-            Upload Videos
-          </h2>
-          <input
-            type="file"
-            accept="video/*"
-            multiple
-            onChange={handleFileChange}
-            className="block w-full bg-[#111] border border-[#444] rounded-md text-sm text-[#fff] px-3 py-2 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:bg-[#333] file:text-white file:cursor-pointer"
-          />
-          {overflowNote && (
-            <p className="text-xs text-[#f0b429] mt-2">
-              Only the first {MAX_VIDEOS} videos are analyzed.
+        {/* Upload: one clip per putt (left) or one multi-putt video (right) */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+          <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5">
+            <h2 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-1">
+              Individual Putts
+            </h2>
+            <p className="text-xs text-[#888] mb-3">
+              One video per putt, up to {MAX_VIDEOS}
             </p>
-          )}
-          {videos.length > 0 && (
-            <p className="text-xs text-[#888] mt-2">
-              {videos.length} video{videos.length > 1 ? "s" : ""} loaded
+            <input
+              type="file"
+              accept="video/*"
+              multiple
+              onChange={handleFileChange}
+              className="block w-full bg-[#111] border border-[#444] rounded-md text-sm text-[#fff] px-3 py-2 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:bg-[#333] file:text-white file:cursor-pointer"
+            />
+            {overflowNote && (
+              <p className="text-xs text-[#f0b429] mt-2">
+                Only the first {MAX_VIDEOS} videos are analyzed.
+              </p>
+            )}
+            {videos.length > 0 && (
+              <p className="text-xs text-[#888] mt-2">
+                {videos.length} video{videos.length > 1 ? "s" : ""} loaded
+              </p>
+            )}
+          </div>
+          <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5">
+            <h2 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-1">
+              Full Session
+            </h2>
+            <p className="text-xs text-[#888] mb-3">
+              One video with several putts — split up automatically
             </p>
-          )}
+            <input
+              type="file"
+              accept="video/*"
+              onChange={handleSessionFileChange}
+              className="block w-full bg-[#111] border border-[#444] rounded-md text-sm text-[#fff] px-3 py-2 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:bg-[#333] file:text-white file:cursor-pointer"
+            />
+            {session && (
+              <p className="text-xs text-[#888] mt-2">{session.file.name} loaded</p>
+            )}
+          </div>
         </div>
 
         {/* Summary */}
-        {videos.length > 0 && (
+        {haveUploads && (
           <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5 mb-6">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-xs font-semibold uppercase tracking-widest text-[#aaa]">
@@ -134,7 +204,9 @@ function App() {
                   <span className="w-3.5 h-3.5 border-2 border-[#22c55e] border-t-transparent rounded-full animate-spin" />
                 )}
                 {anyProcessing ? "Analyzing… " : ""}
-                {analyzedCount} of {videos.length} analyzed
+                {session
+                  ? `${analyzedCount} putt${analyzedCount === 1 ? "" : "s"} found`
+                  : `${analyzedCount} of ${videos.length} analyzed`}
               </span>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -188,6 +260,16 @@ function App() {
               />
             ))}
           </div>
+        )}
+
+        {/* Session card */}
+        {session && (
+          <SessionCard
+            key={session.id}
+            file={session.file}
+            onResult={handleSessionResult}
+            onBusyChange={handleSessionBusy}
+          />
         )}
       </div>
     </div>

@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import tempfile
 import os
-from .analyzer import analyze_putt, detect_ball_in_frame
+from .analyzer import CalibrationError, analyze_putt, analyze_session, detect_ball_in_frame
 
 app = FastAPI(title="Putting Gate Analyzer")
 
@@ -59,6 +59,45 @@ async def analyze(
     finally:
         os.unlink(tmp_path)
 
+    return JSONResponse(result)
+
+
+@app.post("/analyze-session")
+async def analyze_session_endpoint(
+    video: UploadFile = File(...),
+    gate_width_px: int = Form(default=0),
+    gate_width_mm: float = Form(default=0.0),
+    fps: float = Form(default=0.0),
+):
+    """Analyze a video containing multiple putts.
+
+    Calibration is derived from the laser dots and the resting ball on a quiet
+    frame; pass both gate_width fields to override the mm-per-px scale.
+    """
+    if not video.content_type.startswith("video/"):
+        raise HTTPException(status_code=400, detail="File must be a video")
+
+    suffix = os.path.splitext(video.filename or "video.mp4")[1] or ".mp4"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(await video.read())
+        tmp_path = tmp.name
+
+    try:
+        result = analyze_session(
+            video_path=tmp_path,
+            gate_width_px=gate_width_px or None,
+            gate_width_mm=gate_width_mm or None,
+            fps=fps or None,
+        )
+    except CalibrationError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Auto-calibration failed: {exc}"
+        )
+    finally:
+        os.unlink(tmp_path)
+
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
     return JSONResponse(result)
 
 

@@ -2,6 +2,21 @@ import cv2
 import numpy as np
 from typing import Optional
 
+from .segmenter import motion_levels, quiet_frames, segment_motion
+
+GOLF_BALL_DIAMETER_MM = 42.67
+
+# Sanity bounds for a real putt rolling through the gate; anything outside is a
+# mis-tracked reset event (a shoe drifting across the gate line, a hand placing
+# the ball), not a putt.
+MIN_TRACK_COUNT = 5
+MIN_PUTT_SPEED_MPS = 0.2
+MAX_PUTT_SPEED_MPS = 6.0
+
+
+class CalibrationError(Exception):
+    """Auto-calibration could not derive the gate and scale from the video."""
+
 
 def _brightest_circle(
     gray: np.ndarray, candidates: np.ndarray
@@ -345,30 +360,32 @@ def detect_ball_in_frame(
     return result
 
 
-def analyze_putt(
-    video_path: str,
+def _analyze_segment(
+    cap: cv2.VideoCapture,
+    start_frame: int,
+    end_frame: Optional[int],
     gate_center_x: int,
     gate_line_y: int,
-    gate_width_px: int,
-    gate_width_mm: float,
+    mm_per_px: float,
+    fps: float,
+    corridor_px: float = 0.0,
     ball_radius_hint: Optional[int] = None,
     ball_x_hint: Optional[int] = None,
     ball_y_hint: Optional[int] = None,
     aim_top_x: Optional[int] = None,
     aim_top_y: Optional[int] = None,
-    fps: Optional[float] = None,
+    require_address_ball: bool = False,
 ) -> dict:
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return {"error": "Could not open video"}
-    cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 1)
+    """Track the ball over frames ``[start_frame, end_frame)`` and measure the putt.
 
-    # Prefer the frontend-measured fps (more reliable than OpenCV's
-    # CAP_PROP_FPS, which is wrong for some containers); fall back to the
-    # container value, then 30.
-    effective_fps = fps if (fps and fps > 0) else (cap.get(cv2.CAP_PROP_FPS) or 30.0)
-
-    mm_per_px = gate_width_mm / gate_width_px
+    The capture must already be positioned at ``start_frame``; frames are read
+    strictly sequentially (seeking with CAP_PROP_POS_FRAMES is keyframe-granular
+    on iPhone .mov files, so callers grab()-skip instead). ``frame_idx`` stays in
+    absolute source frames, so speed math over ``position_frames`` is unaffected
+    by the range. With ``require_address_ball`` the segment is rejected up front
+    unless the cold-start seed lands near the aim-line origin (the ball-rest
+    laser dot) — a reset walk-in starts with the ball absent from address.
+    """
     positions: list[tuple[float, float]] = []
     # Source-frame index for each detected position, so speed uses real elapsed
     # time even when the tracker drops a frame.
@@ -384,8 +401,8 @@ def analyze_putt(
     vx: float = 0.0  # ball velocity from the previous step, for prediction
     vy: float = 0.0
 
-    frame_idx = 0
-    while True:
+    frame_idx = start_frame
+    while end_frame is None or frame_idx < end_frame:
         ret, frame = cap.read()
         if not ret:
             break
@@ -401,15 +418,33 @@ def analyze_putt(
         # Keep only blobs inside the corridor around the aim line. The ball stays
         # near gate_center_x (its offset is what we measure); the putter shaft
         # enters from the side, so the corridor rejects most of it.
-        corridor_hw = max(gate_width_px, 5.0 * ball_r)
+        corridor_hw = max(corridor_px, 5.0 * ball_r)
         in_corridor = [c for c in candidates if abs(c[0] - gate_center_x) <= corridor_hw]
         pool = in_corridor or candidates
 
         # On the first frame without a supplied hint, seed on the leading disc.
-        if frame_idx == 0 and last_x is None:
+        if frame_idx == start_frame and last_x is None:
             seed = _pick_seed(pool, w, h, center_x=gate_center_x)
             if seed is not None:
                 last_x, last_y, ball_r = seed[0], seed[1], max(5.0, seed[2])
+            if require_address_ball and aim_top_x is not None and aim_top_y is not None:
+                too_far = seed is None or (
+                    (seed[0] - aim_top_x) ** 2 + (seed[1] - aim_top_y) ** 2
+                ) ** 0.5 > max(4.0 * ball_r, 40.0)
+                if too_far:
+                    return {
+                        "offset_px": None,
+                        "offset_mm": None,
+                        "direction": None,
+                        "track_count": 0,
+                        "positions": [],
+                        "hough_circles": [],
+                        "crossing_pos": None,
+                        "speed_mps": None,
+                        "crossed_gate": False,
+                        "frames_read": frame_idx - start_frame + 1,
+                        "message": "No resting ball at address — segment skipped",
+                    }
 
         detected_pos: Optional[tuple[float, float]] = None
         if last_x is not None and last_y is not None:
@@ -441,7 +476,7 @@ def analyze_putt(
 
         frame_idx += 1
 
-    cap.release()
+    frames_read = frame_idx - start_frame
 
     serialized = [[round(x, 1), round(y, 1)] for x, y in positions]
     serialized_hough = [
@@ -458,6 +493,8 @@ def analyze_putt(
             "hough_circles": serialized_hough,
             "crossing_pos": None,
             "speed_mps": None,
+            "crossed_gate": False,
+            "frames_read": frames_read,
             "message": "Ball not detected — check calibration values",
         }
 
@@ -491,7 +528,7 @@ def analyze_putt(
 
     # Speed at the moment the ball crosses the gate, where mm_per_px is valid.
     speed_mps = _gate_speed_mps(
-        positions, position_frames, seg_index, mm_per_px, effective_fps
+        positions, position_frames, seg_index, mm_per_px, fps
     )
 
     result = {
@@ -503,7 +540,260 @@ def analyze_putt(
         "hough_circles": serialized_hough,
         "crossing_pos": [round(crossing_pos[0], 1), round(crossing_pos[1], 1)],
         "speed_mps": round(speed_mps, 2) if speed_mps is not None else None,
+        "crossed_gate": crossing is not None,
+        "frames_read": frames_read,
     }
     if message is not None:
         result["message"] = message
     return result
+
+
+def analyze_putt(
+    video_path: str,
+    gate_center_x: int,
+    gate_line_y: int,
+    gate_width_px: int,
+    gate_width_mm: float,
+    ball_radius_hint: Optional[int] = None,
+    ball_x_hint: Optional[int] = None,
+    ball_y_hint: Optional[int] = None,
+    aim_top_x: Optional[int] = None,
+    aim_top_y: Optional[int] = None,
+    fps: Optional[float] = None,
+) -> dict:
+    """Analyze a single-putt video with client-supplied gate calibration."""
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return {"error": "Could not open video"}
+    cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 1)
+
+    # Prefer the frontend-measured fps (more reliable than OpenCV's
+    # CAP_PROP_FPS, which is wrong for some containers); fall back to the
+    # container value, then 30.
+    effective_fps = fps if (fps and fps > 0) else (cap.get(cv2.CAP_PROP_FPS) or 30.0)
+
+    try:
+        result = _analyze_segment(
+            cap,
+            start_frame=0,
+            end_frame=None,
+            gate_center_x=gate_center_x,
+            gate_line_y=gate_line_y,
+            mm_per_px=gate_width_mm / gate_width_px,
+            fps=effective_fps,
+            corridor_px=float(gate_width_px),
+            ball_radius_hint=ball_radius_hint,
+            ball_x_hint=ball_x_hint,
+            ball_y_hint=ball_y_hint,
+            aim_top_x=aim_top_x,
+            aim_top_y=aim_top_y,
+        )
+    finally:
+        cap.release()
+    result.pop("frames_read", None)
+    return result
+
+
+def _read_frame_at(video_path: str, frame_idx: int) -> Optional[np.ndarray]:
+    """Read one frame by index. Seeking is keyframe-granular on iPhone .mov, but
+    calibration frames sit mid-quiet-run, so landing a few frames off is fine."""
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return None
+    cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 1)
+    if frame_idx > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+    ok, frame = cap.read()
+    cap.release()
+    return frame if ok else None
+
+
+def _calibrate(
+    frame: np.ndarray,
+    gate_width_px: Optional[int],
+    gate_width_mm: Optional[float],
+) -> tuple[Optional[dict], str]:
+    """Derive gate, aim line and scale from one quiet frame.
+
+    The bottom laser dot anchors the gate; the top dot (when present) marks the
+    ball at rest and starts the aim line. Scale comes from the resting ball's
+    radius via the standardized golf-ball diameter, unless both gate-width
+    overrides are supplied. Returns ``(calibration, "")`` or ``(None, reason)``.
+    """
+    h, w = frame.shape[:2]
+    min_r = max(8, w // 60)
+    max_r = max(min_r + 20, w // 5)
+
+    lasers = _detect_laser_dots(frame)
+    if not lasers:
+        return None, "no laser dots detected"
+    bottom = lasers[-1]
+    top = lasers[0] if len(lasers) >= 2 else None
+
+    candidates = _white_ball_candidates(frame, min_r, max_r)
+    ball: Optional[tuple[float, float, float]] = None
+    if top is not None and candidates:
+        nearest = min(
+            candidates,
+            key=lambda c: (c[0] - top[0]) ** 2 + (c[1] - top[1]) ** 2,
+        )
+        dist = ((nearest[0] - top[0]) ** 2 + (nearest[1] - top[1]) ** 2) ** 0.5
+        # The resting ball sits on/near the ball-rest dot; anything farther is
+        # some other white blob (putter, shoe) and can't size the scale.
+        if dist <= max(6.0 * nearest[2], 0.1 * w):
+            ball = (nearest[0], nearest[1], nearest[2])
+    if ball is None:
+        ball = _pick_seed(candidates, w, h, center_x=round(bottom[0]))
+
+    if gate_width_px and gate_width_mm:
+        mm_per_px = gate_width_mm / gate_width_px
+        scale_source = "gate_width_override"
+    elif ball is not None:
+        # The address-radius scale carries some perspective error vs. the gate
+        # plane (the ball is farther, hence smaller, at address).
+        mm_per_px = GOLF_BALL_DIAMETER_MM / (2.0 * ball[2])
+        scale_source = "ball_radius"
+    else:
+        return None, "no resting ball to derive the mm-per-px scale"
+
+    return {
+        "gate_center_x": round(bottom[0]),
+        "gate_line_y": round(bottom[1]),
+        "aim_top": [round(top[0], 1), round(top[1], 1)] if top is not None else None,
+        "ball_radius_px": round(ball[2], 1) if ball is not None else None,
+        "mm_per_px": mm_per_px,
+        "scale_source": scale_source,
+    }, ""
+
+
+def analyze_session(
+    video_path: str,
+    gate_width_px: Optional[int] = None,
+    gate_width_mm: Optional[float] = None,
+    fps: Optional[float] = None,
+    include_dropped: bool = False,
+) -> dict:
+    """Split a multi-putt video into motion segments and analyze each putt.
+
+    Calibration is automatic (see ``_calibrate``); segments that do not yield a
+    tracked ball crossing the gate at a plausible putt speed are silently
+    dropped, so ``putts`` holds only real putts while ``segments_detected``
+    records how many motion candidates were found (``include_dropped`` adds a
+    ``dropped`` list with per-segment rejection details, for tuning harnesses).
+    Raises ``CalibrationError`` when no quiet frame yields a usable
+    calibration. Synchronous and decode-bound (two sequential passes), so
+    callers should keep clips to a few minutes.
+    """
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return {"error": "Could not open video"}
+    cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 1)
+    effective_fps = fps if (fps and fps > 0) else (cap.get(cv2.CAP_PROP_FPS) or 30.0)
+    levels = motion_levels(cap)
+    cap.release()
+    if levels.size == 0:
+        return {"error": "Could not read video frames"}
+    frame_count = int(levels.size) + 1
+
+    segments = segment_motion(levels, effective_fps)
+
+    calibration = None
+    failures: list[str] = []
+    for quiet_idx in quiet_frames(levels, effective_fps, segments):
+        frame = _read_frame_at(video_path, quiet_idx)
+        if frame is None:
+            failures.append(f"frame {quiet_idx}: unreadable")
+            continue
+        calibration, reason = _calibrate(frame, gate_width_px, gate_width_mm)
+        if calibration is not None:
+            calibration["calibration_frame"] = quiet_idx
+            break
+        failures.append(f"frame {quiet_idx}: {reason}")
+    if calibration is None:
+        raise CalibrationError("; ".join(failures))
+
+    aim_top = calibration["aim_top"]
+    ball_r = calibration["ball_radius_px"]
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return {"error": "Could not open video"}
+    cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 1)
+
+    putts: list[dict] = []
+    dropped: list[dict] = []
+    pos = 0
+    try:
+        for start, end in segments:
+            while pos < start and cap.grab():
+                pos += 1
+            if pos < start:  # hit EOF while skipping
+                break
+            result = _analyze_segment(
+                cap,
+                start_frame=start,
+                end_frame=end,
+                gate_center_x=calibration["gate_center_x"],
+                gate_line_y=calibration["gate_line_y"],
+                mm_per_px=calibration["mm_per_px"],
+                fps=effective_fps,
+                ball_radius_hint=round(ball_r) if ball_r else None,
+                aim_top_x=round(aim_top[0]) if aim_top else None,
+                aim_top_y=round(aim_top[1]) if aim_top else None,
+                require_address_ball=aim_top is not None,
+            )
+            pos = start + result.pop("frames_read", end - start)
+
+            speed = result.get("speed_mps")
+            is_putt = (
+                "error" not in result
+                and result.get("track_count", 0) >= MIN_TRACK_COUNT
+                and result.get("crossed_gate")
+                and speed is not None
+                and MIN_PUTT_SPEED_MPS <= speed <= MAX_PUTT_SPEED_MPS
+            )
+            if is_putt:
+                putts.append({
+                    "index": len(putts),
+                    "start_frame": start,
+                    "end_frame": end,
+                    "start_s": round(start / effective_fps, 2),
+                    "end_s": round(end / effective_fps, 2),
+                    **{key: result[key] for key in (
+                        "offset_px", "offset_mm", "direction", "speed_mps",
+                        "track_count", "crossing_pos", "positions", "hough_circles",
+                    )},
+                })
+            elif include_dropped:
+                dropped.append({
+                    "start_frame": start,
+                    "end_frame": end,
+                    "start_s": round(start / effective_fps, 2),
+                    "end_s": round(end / effective_fps, 2),
+                    "track_count": result.get("track_count"),
+                    "crossed_gate": result.get("crossed_gate"),
+                    "speed_mps": result.get("speed_mps"),
+                    "message": result.get("message") or result.get("error"),
+                })
+    finally:
+        cap.release()
+
+    response = {
+        "fps": round(effective_fps, 2),
+        "frame_count": frame_count,
+        "duration_s": round(frame_count / effective_fps, 2),
+        "calibration": {
+            "gate_center_x": calibration["gate_center_x"],
+            "gate_line_y": calibration["gate_line_y"],
+            "aim_top": aim_top,
+            "ball_radius_px": ball_r,
+            "mm_per_px": round(calibration["mm_per_px"], 4),
+            "calibration_frame": calibration["calibration_frame"],
+            "scale_source": calibration["scale_source"],
+        },
+        "segments_detected": len(segments),
+        "putts": putts,
+    }
+    if include_dropped:
+        response["dropped"] = dropped
+    return response
