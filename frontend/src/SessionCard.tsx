@@ -95,6 +95,10 @@ function SessionCard({ file, onResult, onBusyChange }: SessionCardProps) {
       canvas.width = rect.width;
       canvas.height = rect.height;
     }
+    canvas.style.width = `${rect.width}px`;
+    canvas.style.height = `${rect.height}px`;
+    canvas.style.left = `${video.offsetLeft}px`;
+    canvas.style.top = `${video.offsetTop}px`;
   }, []);
 
   // Overlay: gate line + aim line from the backend's auto-calibration, and the
@@ -192,8 +196,8 @@ function SessionCard({ file, onResult, onBusyChange }: SessionCardProps) {
     : 0;
 
   return (
-    <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-4 flex flex-col gap-3">
-      <div className="flex items-center justify-between">
+    <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-4 flex flex-col gap-4">
+      <div className="flex items-center justify-between border-b border-[#333] pb-3">
         <h3 className="text-sm font-semibold text-white truncate" title={file.name}>
           Session Video
         </h3>
@@ -202,87 +206,94 @@ function SessionCard({ file, onResult, onBusyChange }: SessionCardProps) {
         </span>
       </div>
 
-      <div className="relative w-full">
-        <video
-          ref={videoRef}
-          src={videoUrl ?? undefined}
-          className="w-full block rounded-md bg-black"
-          playsInline
-          controls
-          onLoadedMetadata={handleVideoMetadata}
-          onLoadedData={handleVideoData}
-        />
-        <canvas ref={canvasRef} className="cal-canvas" />
-        {loading && (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/50 rounded-md">
-            <span className="w-8 h-8 border-[3px] border-[#22c55e] border-t-transparent rounded-full animate-spin" />
-            <span className="text-xs text-[#ddd]">
-              Splitting into putts… this can take a minute
-            </span>
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Left Column: Video */}
+        <div className="lg:col-span-7 flex flex-col gap-3">
+          <div className="relative w-full flex justify-center bg-black rounded-md overflow-hidden" style={{ maxHeight: 'calc(100vh - 350px)', minHeight: '320px' }}>
+            <video
+              ref={videoRef}
+              src={videoUrl ?? undefined}
+              className="max-h-full max-w-full h-auto w-auto object-contain block"
+              playsInline
+              controls
+              onLoadedMetadata={handleVideoMetadata}
+              onLoadedData={handleVideoData}
+            />
+            <canvas ref={canvasRef} className="absolute pointer-events-none rounded-md z-[4]" />
+            {loading && (
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/50 rounded-md">
+                <span className="w-8 h-8 border-[3px] border-[#22c55e] border-t-transparent rounded-full animate-spin" />
+                <span className="text-xs text-[#ddd]">
+                  Splitting into putts… this can take a minute
+                </span>
+              </div>
+            )}
           </div>
-        )}
+          {error && (
+            <div className="bg-[#3a0a0a] border border-[#7f1d1d] text-[#fca5a5] rounded-lg px-3 py-2 text-xs">
+              {error}
+            </div>
+          )}
+        </div>
+
+        {/* Right Column: Putts list */}
+        <div className="lg:col-span-5 flex flex-col">
+          {result && result.putts.length === 0 && (
+            <p className="text-sm text-[#888]">
+              No putts found in this video — make sure the ball starts on the
+              ball-rest laser dot and rolls through the gate.
+            </p>
+          )}
+
+          {result && result.putts.length > 0 && (
+            <div className="flex flex-col">
+              <p className="text-xs text-[#888] mb-2">
+                {result.putts.length} putt{result.putts.length > 1 ? "s" : ""} found
+                {droppedCount > 0 &&
+                  ` (${droppedCount} other motion segment${droppedCount > 1 ? "s" : ""} skipped)`}
+                {" — "}click a putt to jump to it
+              </p>
+              <div className="flex flex-col gap-1 overflow-y-auto max-h-[calc(100vh-380px)] pr-1">
+                {result.putts.map((putt, i) => {
+                  const side =
+                    putt.offset_mm == null ? "center" : golferSide(putt.offset_mm);
+                  return (
+                    <button
+                      key={putt.index}
+                      type="button"
+                      onClick={() => seekToPutt(i)}
+                      className={`flex items-baseline gap-4 text-left px-3 py-2 rounded-md border text-sm cursor-pointer ${
+                        selected === i
+                          ? "bg-[#232323] border-[#555]"
+                          : "bg-[#111] border-[#333] hover:bg-[#1e1e1e]"
+                      }`}
+                    >
+                      <span className="text-white font-semibold whitespace-nowrap">
+                        Putt {i + 1}
+                      </span>
+                      <span className="text-[11px] text-[#666] whitespace-nowrap">
+                        {putt.start_s.toFixed(1)}–{putt.end_s.toFixed(1)}s
+                      </span>
+                      <span className="text-[#ddd] whitespace-nowrap">
+                        {putt.offset_mm == null
+                          ? "—"
+                          : `${Math.abs(putt.offset_mm).toFixed(1)} mm ${
+                              side === "center" ? "on center" : side
+                            }`}
+                      </span>
+                      {putt.speed_mps != null && (
+                        <span className="text-[#aaa] whitespace-nowrap">
+                          {putt.speed_mps} m/s
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
-
-      {error && (
-        <div className="bg-[#3a0a0a] border border-[#7f1d1d] text-[#fca5a5] rounded-lg px-3 py-2 text-xs">
-          {error}
-        </div>
-      )}
-
-      {result && result.putts.length === 0 && (
-        <p className="text-sm text-[#888]">
-          No putts found in this video — make sure the ball starts on the
-          ball-rest laser dot and rolls through the gate.
-        </p>
-      )}
-
-      {result && result.putts.length > 0 && (
-        <div className="border-t border-[#333] pt-3">
-          <p className="text-xs text-[#888] mb-2">
-            {result.putts.length} putt{result.putts.length > 1 ? "s" : ""} found
-            {droppedCount > 0 &&
-              ` (${droppedCount} other motion segment${droppedCount > 1 ? "s" : ""} skipped)`}
-            {" — "}click a putt to jump to it
-          </p>
-          <div className="flex flex-col gap-1">
-            {result.putts.map((putt, i) => {
-              const side =
-                putt.offset_mm == null ? "center" : golferSide(putt.offset_mm);
-              return (
-                <button
-                  key={putt.index}
-                  type="button"
-                  onClick={() => seekToPutt(i)}
-                  className={`flex items-baseline gap-4 text-left px-3 py-2 rounded-md border text-sm cursor-pointer ${
-                    selected === i
-                      ? "bg-[#232323] border-[#555]"
-                      : "bg-[#111] border-[#333] hover:bg-[#1e1e1e]"
-                  }`}
-                >
-                  <span className="text-white font-semibold whitespace-nowrap">
-                    Putt {i + 1}
-                  </span>
-                  <span className="text-[11px] text-[#666] whitespace-nowrap">
-                    {putt.start_s.toFixed(1)}–{putt.end_s.toFixed(1)}s
-                  </span>
-                  <span className="text-[#ddd] whitespace-nowrap">
-                    {putt.offset_mm == null
-                      ? "—"
-                      : `${Math.abs(putt.offset_mm).toFixed(1)} mm ${
-                          side === "center" ? "on center" : side
-                        }`}
-                  </span>
-                  {putt.speed_mps != null && (
-                    <span className="text-[#aaa] whitespace-nowrap">
-                      {putt.speed_mps} m/s
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

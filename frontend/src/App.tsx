@@ -100,6 +100,16 @@ function App() {
     setSessionBusy(b);
   }, []);
 
+  const handleReset = useCallback(() => {
+    setVideos([]);
+    setResults({});
+    setBusy({});
+    setOverflowNote(false);
+    setSession(null);
+    setSessionResult(undefined);
+    setSessionBusy(false);
+  }, []);
+
   // Aggregate over putts that produced a usable offset — the per-video results
   // in single-putt mode, or the putts split out of the session video.
   const candidates: (AnalysisResult | null | undefined)[] = session
@@ -138,16 +148,30 @@ function App() {
   return (
     <div className="min-h-screen bg-[#0d0d0d] text-[#d0d0d0] px-4 py-8">
       <div className="max-w-6xl mx-auto">
-        <h1 className="text-3xl font-bold text-white mb-1">
-          Putting Gate Dashboard
-        </h1>
-        <p className="text-sm text-[#888] mb-6">
-          Upload one clip per putt, or a single video of the whole session —
-          analysis runs automatically
-        </p>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+          <div>
+            <h1 className="text-3xl font-bold text-white mb-1">
+              Putting Gate Dashboard
+            </h1>
+            <p className="text-sm text-[#888]">
+              Upload one clip per putt, or a single video of the whole session —
+              analysis runs automatically
+            </p>
+          </div>
+          {haveUploads && (
+            <button
+              type="button"
+              onClick={handleReset}
+              className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
+            >
+              Upload New
+            </button>
+          )}
+        </div>
 
         {/* Upload: one clip per putt (left) or one multi-putt video (right) */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+        {!haveUploads && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
           <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5">
             <h2 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-1">
               Individual Putts
@@ -167,11 +191,6 @@ function App() {
                 Only the first {MAX_VIDEOS} videos are analyzed.
               </p>
             )}
-            {videos.length > 0 && (
-              <p className="text-xs text-[#888] mt-2">
-                {videos.length} video{videos.length > 1 ? "s" : ""} loaded
-              </p>
-            )}
           </div>
           <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5">
             <h2 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-1">
@@ -186,11 +205,9 @@ function App() {
               onChange={handleSessionFileChange}
               className="block w-full bg-[#111] border border-[#444] rounded-md text-sm text-[#fff] px-3 py-2 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:bg-[#333] file:text-white file:cursor-pointer"
             />
-            {session && (
-              <p className="text-xs text-[#888] mt-2">{session.file.name} loaded</p>
-            )}
           </div>
         </div>
+        )}
 
         {/* Summary */}
         {haveUploads && (
