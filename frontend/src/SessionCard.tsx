@@ -5,6 +5,7 @@ import {
   measureVideoFps,
   type SessionResult,
 } from "./analysis";
+import { supabase } from "./supabaseClient";
 
 interface SessionCardProps {
   file: File;
@@ -46,9 +47,21 @@ function SessionCard({ file, onResult, onBusyChange }: SessionCardProps) {
       const fd = new FormData();
       fd.append("video", file);
       if (fps) fd.append("fps", String(fps));
+
+      // Tie the persisted session to the signed-in user, and send the access
+      // token so the backend can verify the request.
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (session?.user.id) fd.append("user_id", session.user.id);
+      const headers: HeadersInit = session
+        ? { Authorization: `Bearer ${session.access_token}` }
+        : {};
+
       try {
         const res = await fetch(`${API_BASE}/analyze-session`, {
           method: "POST",
+          headers,
           body: fd,
         });
         if (!res.ok) {

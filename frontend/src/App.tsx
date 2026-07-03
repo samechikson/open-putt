@@ -8,6 +8,7 @@ import {
   type AnalysisResult,
   type SessionResult,
 } from "./analysis";
+import { useAuth } from "./AuthContext";
 
 const MAX_VIDEOS = 5;
 
@@ -32,6 +33,7 @@ function stdev(nums: number[]): number | null {
 }
 
 function App() {
+  const { user, signOut } = useAuth();
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [results, setResults] = useState<Record<string, AnalysisResult | null>>(
     {},
@@ -158,15 +160,31 @@ function App() {
               analysis runs automatically
             </p>
           </div>
-          {haveUploads && (
-            <button
-              type="button"
-              onClick={handleReset}
-              className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
-            >
-              Upload New
-            </button>
-          )}
+          <div className="flex items-center gap-3">
+            {haveUploads && (
+              <button
+                type="button"
+                onClick={handleReset}
+                className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
+              >
+                Upload New
+              </button>
+            )}
+            {user && (
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-[#888] hidden sm:inline">
+                  {user.email}
+                </span>
+                <button
+                  type="button"
+                  onClick={signOut}
+                  className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Upload: one clip per putt (left) or one multi-putt video (right) */}
