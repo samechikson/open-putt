@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Header, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -6,14 +6,11 @@ import logging
 import tempfile
 import os
 import uuid
-import asyncio
+import hmac
 from typing import Optional
 from .analyzer import CalibrationError, analyze_putt, analyze_session, detect_ball_in_frame
 from .db import persist_session, create_pending_session, set_session_status
-
-# Cap concurrent background analyses so a small instance isn't overwhelmed;
-# extra jobs wait their turn in 'queued'. Tune with MAX_CONCURRENT_JOBS.
-_JOB_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("MAX_CONCURRENT_JOBS", "1")))
+from . import cloud
 
 logger = logging.getLogger(__name__)
 
@@ -115,58 +112,6 @@ def _no_putts_message(result: dict) -> str:
     )
 
 
-async def _run_session_job(
-    session_id: str,
-    tmp_path: str,
-    metadata: dict,
-    gate_width_px: int,
-    gate_width_mm: float,
-    fps: float,
-) -> None:
-    """Background worker: analyze the clip and drive the session row through
-    processing → done/error. Never raises; failures are recorded on the row."""
-    try:
-        async with _JOB_SEMAPHORE:  # bound concurrent heavy analyses
-            await run_in_threadpool(set_session_status, session_id, "processing")
-            try:
-                result = await run_in_threadpool(
-                    analyze_session,
-                    video_path=tmp_path,
-                    gate_width_px=gate_width_px or None,
-                    gate_width_mm=gate_width_mm or None,
-                    fps=fps or None,
-                )
-            except CalibrationError as exc:
-                # `exc` is already a plain-language, actionable message.
-                await run_in_threadpool(set_session_status, session_id, "error", str(exc))
-                return
-
-            if "error" in result:
-                await run_in_threadpool(set_session_status, session_id, "error", result["error"])
-                return
-            if not result.get("putts"):
-                await run_in_threadpool(
-                    set_session_status, session_id, "error", _no_putts_message(result)
-                )
-                return
-
-            # persist_session upserts the full row (status 'done') and its putts.
-            await run_in_threadpool(persist_session, session_id, metadata, result)
-    except Exception:  # noqa: BLE001 — a job failure must not crash the worker
-        logger.exception("Session job %s failed", session_id)
-        try:
-            await run_in_threadpool(
-                set_session_status, session_id, "error", "Analysis failed unexpectedly."
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception("Could not mark session %s as failed", session_id)
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-
-
 @app.post("/analyze-session", status_code=202)
 async def analyze_session_endpoint(
     video: UploadFile = File(...),
@@ -183,18 +128,20 @@ async def analyze_session_endpoint(
 ):
     """Queue analysis of a multi-putt video and return immediately.
 
-    Analysis is decode-bound and can run for minutes, so instead of holding the
-    request open we create the session row as 'queued', kick off a background
-    job, and return its id. Clients watch the row (via Supabase Realtime) for the
+    Analysis is decode-bound and can run for minutes, so we don't hold the
+    request open: the clip is stored in Cloud Storage, the session row is created
+    as 'queued', and a Cloud Task is enqueued to run the analysis in a separate
+    `/process` request. Clients watch the row (via Supabase Realtime) for the
     transition to 'done' (results + putts persisted) or 'error' (message on the
-    row). Calibration is automatic; pass both gate_width fields to override the
-    mm-per-px scale.
+    row). Calibration is automatic; pass both gate_width fields to override scale.
     """
     if not video.content_type.startswith("video/"):
         raise HTTPException(status_code=400, detail="File must be a video")
+    if not cloud.tasks_enabled():
+        raise HTTPException(status_code=503, detail="Analysis backend is not configured.")
 
-    tmp_path = await _save_upload_to_temp(video)
     session_id = recording_id or str(uuid.uuid4())
+    object_name = cloud.object_name_for(session_id, video.filename)
     metadata = {
         "user_id": user_id,
         "file_name": video.filename,
@@ -204,22 +151,130 @@ async def analyze_session_endpoint(
         "break_type": break_type,
     }
 
+    # Stream the upload to a temp file (bounded memory), then hand it to GCS.
+    tmp_path = await _save_upload_to_temp(video)
+    try:
+        await run_in_threadpool(cloud.upload_file_to_gcs, tmp_path, object_name)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
     # Create the row before returning so the client can immediately subscribe.
     try:
         await run_in_threadpool(create_pending_session, session_id, metadata)
     except Exception:  # noqa: BLE001
-        os.unlink(tmp_path)
+        await run_in_threadpool(cloud.delete_gcs_object, object_name)
         logger.exception("Failed to create pending session %s", session_id)
         raise HTTPException(status_code=503, detail="Could not queue analysis. Try again.")
 
-    # Fire-and-forget: runs independently of this request's lifecycle.
-    asyncio.create_task(
-        _run_session_job(session_id, tmp_path, metadata, gate_width_px, gate_width_mm, fps)
-    )
+    # Enqueue the background analysis. If this fails, mark the row so the client
+    # doesn't wait forever.
+    try:
+        await run_in_threadpool(
+            cloud.enqueue_process_task,
+            {
+                "session_id": session_id,
+                "object_name": object_name,
+                "gate_width_px": gate_width_px,
+                "gate_width_mm": gate_width_mm,
+                "fps": fps,
+                "metadata": metadata,
+            },
+        )
+    except Exception:  # noqa: BLE001
+        await run_in_threadpool(set_session_status, session_id, "error", "Could not start analysis.")
+        await run_in_threadpool(cloud.delete_gcs_object, object_name)
+        logger.exception("Failed to enqueue task for session %s", session_id)
+        raise HTTPException(status_code=503, detail="Could not queue analysis. Try again.")
 
     return JSONResponse(
         {"session_id": session_id, "status": "queued"}, status_code=202
     )
+
+
+async def _record_error(session_id: str, object_name: str, message: str) -> None:
+    """Terminal failure: record the message on the row and drop the upload."""
+    await run_in_threadpool(set_session_status, session_id, "error", message)
+    await run_in_threadpool(cloud.delete_gcs_object, object_name)
+
+
+@app.post("/process")
+async def process_session(
+    request: Request,
+    x_tasks_token: Optional[str] = Header(default=None),
+):
+    """Cloud Tasks target: analyze one queued session. CPU is allocated for the
+    full duration of this request, so long clips are safe here.
+
+    Returns 200 for terminal outcomes (done or a domain error — both recorded on
+    the row) so Cloud Tasks stops; returns 500 on an unexpected/infra error so
+    Cloud Tasks retries, giving up (and recording the error) after MAX_RETRIES.
+    """
+    expected = cloud.TASKS_INTERNAL_TOKEN
+    if not expected or not x_tasks_token or not hmac.compare_digest(x_tasks_token, expected):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    payload = await request.json()
+    session_id = payload["session_id"]
+    object_name = payload["object_name"]
+    metadata = payload.get("metadata") or {}
+    gate_width_px = int(payload.get("gate_width_px") or 0)
+    gate_width_mm = float(payload.get("gate_width_mm") or 0.0)
+    fps = float(payload.get("fps") or 0.0)
+    retry_count = int(request.headers.get("X-CloudTasks-TaskRetryCount", "0"))
+
+    tmp_path: Optional[str] = None
+    try:
+        await run_in_threadpool(set_session_status, session_id, "processing")
+        tmp_path = await run_in_threadpool(cloud.download_gcs_to_temp, object_name)
+
+        try:
+            result = await run_in_threadpool(
+                analyze_session,
+                video_path=tmp_path,
+                gate_width_px=gate_width_px or None,
+                gate_width_mm=gate_width_mm or None,
+                fps=fps or None,
+            )
+        except CalibrationError as exc:
+            # `exc` is already a plain-language, actionable message.
+            await _record_error(session_id, object_name, str(exc))
+            return JSONResponse({"status": "error"})
+
+        if "error" in result:
+            await _record_error(session_id, object_name, result["error"])
+            return JSONResponse({"status": "error"})
+        if not result.get("putts"):
+            await _record_error(session_id, object_name, _no_putts_message(result))
+            return JSONResponse({"status": "error"})
+
+        # persist_session upserts the full row (status 'done') and its putts.
+        await run_in_threadpool(persist_session, session_id, metadata, result)
+        await run_in_threadpool(cloud.delete_gcs_object, object_name)
+        return JSONResponse({"status": "done"})
+
+    except Exception:  # noqa: BLE001 — unexpected/infra error
+        max_retries = int(os.environ.get("TASKS_MAX_RETRIES", "3"))
+        logger.exception(
+            "Processing session %s failed (attempt %s/%s)", session_id, retry_count, max_retries
+        )
+        if retry_count >= max_retries:
+            # Out of retries: record the failure and stop (200 → no more retries).
+            try:
+                await _record_error(session_id, object_name, "Analysis failed unexpectedly.")
+            except Exception:  # noqa: BLE001
+                logger.exception("Cleanup after failure of %s failed", session_id)
+            return JSONResponse({"status": "error"})
+        # Let Cloud Tasks retry with backoff; keep the GCS object for the retry.
+        raise HTTPException(status_code=500, detail="Processing failed; will retry")
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 @app.post("/detect-ball")
