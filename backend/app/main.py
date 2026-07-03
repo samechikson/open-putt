@@ -114,14 +114,31 @@ async def analyze_session_endpoint(
             fps=fps or None,
         )
     except CalibrationError as exc:
-        raise HTTPException(
-            status_code=422, detail=f"Auto-calibration failed: {exc}"
-        )
+        # `exc` is already a plain-language, actionable message.
+        raise HTTPException(status_code=422, detail=str(exc))
     finally:
         os.unlink(tmp_path)
 
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
+
+    # Calibration succeeded but no motion segment was a real putt — tell the
+    # user rather than returning an empty, silently-successful result.
+    if not result.get("putts"):
+        segments = result.get("segments_detected", 0)
+        if segments:
+            detail = (
+                f"Found {segments} movement"
+                f"{'s' if segments != 1 else ''} in the video but none looked "
+                "like a putt rolling through the gate. Make sure the ball rolls "
+                "cleanly through both lasers."
+            )
+        else:
+            detail = (
+                "No putts were detected in the video. Record the ball rolling "
+                "through the gate, and keep the camera steady."
+            )
+        raise HTTPException(status_code=422, detail=detail)
 
     # Persist after a successful analysis. A DB failure must not break the
     # response, so log and continue.

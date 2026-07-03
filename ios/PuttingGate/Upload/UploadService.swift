@@ -23,6 +23,11 @@ final class UploadService: NSObject, ObservableObject {
     /// uploading, plus the temporary multipart body file to clean up on completion.
     private var inFlight: [Int: (recordingID: UUID, bodyFile: URL)] = [:]
 
+    /// Response bodies accumulated per task, so a failed upload can surface the
+    /// server's error message (e.g. "Auto-calibration failed") instead of a bare
+    /// status code. A background session delivers the body incrementally.
+    private var responseBodies: [Int: Data] = [:]
+
     /// Completion handler delivered by the app delegate when the system
     /// relaunches us to finish background events.
     var backgroundCompletionHandler: (() -> Void)?
@@ -151,6 +156,20 @@ final class UploadService: NSObject, ObservableObject {
 
 extension UploadService: URLSessionDataDelegate {
 
+    /// Accumulate the response body so a failed upload can show the server's
+    /// message. Delivered before didCompleteWithError; hop to the main actor to
+    /// mutate responseBodies in order with completion.
+    nonisolated func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive data: Data
+    ) {
+        let taskID = dataTask.taskIdentifier
+        Task { @MainActor in
+            self.responseBodies[taskID, default: Data()].append(data)
+        }
+    }
+
     nonisolated func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
@@ -162,16 +181,37 @@ extension UploadService: URLSessionDataDelegate {
 
         Task { @MainActor in
             guard let entry = self.inFlight.removeValue(forKey: taskID) else { return }
+            let body = self.responseBodies.removeValue(forKey: taskID)
             try? FileManager.default.removeItem(at: entry.bodyFile)
 
             if let errorText {
                 self.mark(recordingID: entry.recordingID, state: .failed, error: errorText)
             } else if let code = statusCode, !(200..<300).contains(code) {
-                self.mark(recordingID: entry.recordingID, state: .failed, error: "Server returned HTTP \(code)")
+                let message = Self.serverMessage(from: body)
+                    ?? "Server returned HTTP \(code)"
+                self.mark(recordingID: entry.recordingID, state: .failed, error: message)
             } else {
                 self.mark(recordingID: entry.recordingID, state: .uploaded, error: nil)
             }
         }
+    }
+
+    /// Extract a human-readable message from a FastAPI error body. `detail` is a
+    /// string for HTTPExceptions and an array of `{msg}` objects for request
+    /// validation errors; handle both, else nil.
+    private static func serverMessage(from body: Data?) -> String? {
+        guard let body,
+              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+        else { return nil }
+
+        if let detail = json["detail"] as? String {
+            return detail
+        }
+        if let items = json["detail"] as? [[String: Any]] {
+            let msgs = items.compactMap { $0["msg"] as? String }
+            if !msgs.isEmpty { return msgs.joined(separator: "; ") }
+        }
+        return nil
     }
 
     nonisolated func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {

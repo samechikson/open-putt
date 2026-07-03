@@ -1,8 +1,11 @@
 import cv2
 import numpy as np
+import logging
 from typing import Optional
 
 from .segmenter import motion_levels, quiet_frames, segment_motion
+
+logger = logging.getLogger(__name__)
 
 GOLF_BALL_DIAMETER_MM = 42.67
 
@@ -16,6 +19,41 @@ MAX_PUTT_SPEED_MPS = 6.0
 
 class CalibrationError(Exception):
     """Auto-calibration could not derive the gate and scale from the video."""
+
+
+def _calibration_message(failures: list[str]) -> str:
+    """Turn the per-frame calibration failures into one actionable message.
+
+    Every quiet frame contributes a technical reason like "frame 12: no laser
+    dots detected"; players don't need the frame-by-frame log, just the dominant
+    problem and how to fix it. Picks the most common reason and maps it to
+    plain-language guidance.
+    """
+    reasons = [f.split(": ", 1)[-1] for f in failures]
+    # Most frequent reason wins; ties break toward the first seen.
+    dominant = max(set(reasons), key=reasons.count) if reasons else ""
+
+    if "laser dot" in dominant:
+        return (
+            "Couldn't find the laser gate in the video. Make sure both gate "
+            "lasers are switched on and clearly visible, and hold the camera "
+            "steady for a moment before the first putt."
+        )
+    if "resting ball" in dominant:
+        return (
+            "Couldn't find the ball at address. Place the ball on the marker "
+            "and keep it still at the start of the recording so the analyzer "
+            "can measure the scale."
+        )
+    if "unreadable" in dominant:
+        return (
+            "Couldn't read the video frames. Try recording again, or check the "
+            "clip plays back correctly."
+        )
+    return (
+        "Couldn't calibrate the gate from this video. Make sure the gate lasers "
+        "and the ball at address are both visible before the first putt."
+    )
 
 
 def _brightest_circle(
@@ -564,7 +602,7 @@ def analyze_putt(
     """Analyze a single-putt video with client-supplied gate calibration."""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        return {"error": "Could not open video"}
+        return {"error": "Couldn't open the video file. It may be corrupted or in an unsupported format — try recording again."}
     cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 1)
 
     # Prefer the frontend-measured fps (more reliable than OpenCV's
@@ -686,13 +724,13 @@ def analyze_session(
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        return {"error": "Could not open video"}
+        return {"error": "Couldn't open the video file. It may be corrupted or in an unsupported format — try recording again."}
     cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 1)
     effective_fps = fps if (fps and fps > 0) else (cap.get(cv2.CAP_PROP_FPS) or 30.0)
     levels = motion_levels(cap)
     cap.release()
     if levels.size == 0:
-        return {"error": "Could not read video frames"}
+        return {"error": "Couldn't read any frames from the video. Make sure the clip isn't empty and plays back correctly."}
     frame_count = int(levels.size) + 1
 
     segments = segment_motion(levels, effective_fps)
@@ -710,14 +748,15 @@ def analyze_session(
             break
         failures.append(f"frame {quiet_idx}: {reason}")
     if calibration is None:
-        raise CalibrationError("; ".join(failures))
+        logger.warning("Calibration failed: %s", "; ".join(failures) or "no quiet frames")
+        raise CalibrationError(_calibration_message(failures))
 
     aim_top = calibration["aim_top"]
     ball_r = calibration["ball_radius_px"]
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        return {"error": "Could not open video"}
+        return {"error": "Couldn't open the video file. It may be corrupted or in an unsupported format — try recording again."}
     cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 1)
 
     putts: list[dict] = []
