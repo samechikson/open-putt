@@ -3,10 +3,20 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var coordinator: RecordingCoordinator
+    @EnvironmentObject private var auth: AuthManager
 
     var body: some View {
         NavigationStack {
             Form {
+                Section("Account") {
+                    if case let .signedIn(user) = auth.state {
+                        LabeledContent("Signed in as", value: user.email ?? "—")
+                    }
+                    Button("Sign out", role: .destructive) {
+                        Task { await auth.signOut() }
+                    }
+                }
+
                 Section("Backend") {
                     TextField("Base URL (e.g. http://192.168.1.20:8000)", text: $settings.backendBaseURL)
                         .textInputAutocapitalization(.never)

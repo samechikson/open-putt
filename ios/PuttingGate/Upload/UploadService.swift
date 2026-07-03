@@ -9,6 +9,7 @@ final class UploadService: NSObject, ObservableObject {
 
     private let settings: AppSettings
     private let modelContainer: ModelContainer
+    private let auth: AuthManager
 
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.background(withIdentifier: "com.puttinggate.upload")
@@ -26,9 +27,10 @@ final class UploadService: NSObject, ObservableObject {
     /// relaunches us to finish background events.
     var backgroundCompletionHandler: (() -> Void)?
 
-    init(settings: AppSettings, modelContainer: ModelContainer) {
+    init(settings: AppSettings, modelContainer: ModelContainer, auth: AuthManager) {
         self.settings = settings
         self.modelContainer = modelContainer
+        self.auth = auth
         super.init()
         // Touch the lazy session so background events are delivered to us.
         _ = session
@@ -46,8 +48,13 @@ final class UploadService: NSObject, ObservableObject {
         }
     }
 
-    /// Begin (or retry) uploading a single recording.
+    /// Begin (or retry) uploading a single recording. Fetching a valid auth
+    /// token is async, so the work runs in a Task.
     func upload(_ recording: Recording) {
+        Task { await performUpload(recording) }
+    }
+
+    private func performUpload(_ recording: Recording) async {
         guard let endpoint = settings.uploadURL else {
             mark(recordingID: recording.id, state: .failed, error: "No backend URL configured")
             return
@@ -57,10 +64,14 @@ final class UploadService: NSObject, ObservableObject {
             return
         }
 
+        // Attach the signed-in user so the backend can tie the session to them.
+        let accessToken = await auth.validAccessToken()
+        let userID = auth.userID
+
         let boundary = "Boundary-\(UUID().uuidString)"
         let bodyFile: URL
         do {
-            bodyFile = try makeMultipartBody(for: recording, boundary: boundary)
+            bodyFile = try makeMultipartBody(for: recording, boundary: boundary, userID: userID)
         } catch {
             mark(recordingID: recording.id, state: .failed, error: "Failed to build request: \(error.localizedDescription)")
             return
@@ -69,6 +80,9 @@ final class UploadService: NSObject, ObservableObject {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        if let accessToken {
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        }
 
         let task = session.uploadTask(with: request, fromFile: bodyFile)
         task.taskDescription = recording.id.uuidString
@@ -86,7 +100,7 @@ final class UploadService: NSObject, ObservableObject {
 
     /// Writes a multipart/form-data body (video + metadata) to a temp file.
     /// Background upload tasks require a file source rather than in-memory data.
-    private func makeMultipartBody(for recording: Recording, boundary: String) throws -> URL {
+    private func makeMultipartBody(for recording: Recording, boundary: String, userID: String?) throws -> URL {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("upload-\(recording.id.uuidString).multipart")
         FileManager.default.createFile(atPath: tmp.path, contents: nil)
@@ -101,6 +115,7 @@ final class UploadService: NSObject, ObservableObject {
         }
 
         writeField("recording_id", recording.id.uuidString)
+        if let userID { writeField("user_id", userID) }
         writeField("captured_at", ISO8601DateFormatter().string(from: recording.capturedAt))
         writeField("duration", String(recording.duration))
         writeField("length_feet", String(recording.lengthFeet))
