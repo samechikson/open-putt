@@ -37,3 +37,6 @@ xcuserdata/
 # Local test fixtures (raw clips) and detector debug output
 backend/tests/fixtures/*
 !backend/tests/fixtures/.gitkeep
+
+# Supabase CLI scratch
+supabase/.temp/
