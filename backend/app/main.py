@@ -1,4 +1,5 @@
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import logging
@@ -10,6 +11,23 @@ from .analyzer import CalibrationError, analyze_putt, analyze_session, detect_ba
 from .db import persist_session
 
 logger = logging.getLogger(__name__)
+
+# Read uploads off the wire in 1 MiB chunks so a large clip is never held whole
+# in memory — critical for the 200 MB+ session videos.
+_UPLOAD_CHUNK = 1 << 20
+
+
+async def _save_upload_to_temp(upload: UploadFile) -> str:
+    """Stream an uploaded file to a temp file on disk, returning its path.
+
+    Streaming (vs. ``await upload.read()``) keeps memory bounded to one chunk
+    regardless of clip size.
+    """
+    suffix = os.path.splitext(upload.filename or "video.mp4")[1] or ".mp4"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        while chunk := await upload.read(_UPLOAD_CHUNK):
+            tmp.write(chunk)
+        return tmp.name
 
 app = FastAPI(title="Putting Gate Analyzer")
 
@@ -52,13 +70,13 @@ async def analyze(
     if not video.content_type.startswith("video/"):
         raise HTTPException(status_code=400, detail="File must be a video")
 
-    suffix = os.path.splitext(video.filename or "video.mp4")[1] or ".mp4"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(await video.read())
-        tmp_path = tmp.name
+    tmp_path = await _save_upload_to_temp(video)
 
     try:
-        result = analyze_putt(
+        # Offload the blocking, decode-bound analysis to a thread so the event
+        # loop stays free to answer health checks and other requests.
+        result = await run_in_threadpool(
+            analyze_putt,
             video_path=tmp_path,
             gate_center_x=gate_center_x,
             gate_line_y=gate_line_y,
@@ -101,13 +119,13 @@ async def analyze_session_endpoint(
     if not video.content_type.startswith("video/"):
         raise HTTPException(status_code=400, detail="File must be a video")
 
-    suffix = os.path.splitext(video.filename or "video.mp4")[1] or ".mp4"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(await video.read())
-        tmp_path = tmp.name
+    tmp_path = await _save_upload_to_temp(video)
 
     try:
-        result = analyze_session(
+        # Offload the blocking, decode-bound analysis to a thread so the event
+        # loop stays free to answer health checks and other requests.
+        result = await run_in_threadpool(
+            analyze_session,
             video_path=tmp_path,
             gate_width_px=gate_width_px or None,
             gate_width_mm=gate_width_mm or None,
@@ -144,7 +162,10 @@ async def analyze_session_endpoint(
     # response, so log and continue.
     session_id = recording_id or str(uuid.uuid4())
     try:
-        persisted = persist_session(
+        # persist_session makes blocking Supabase HTTP calls; keep them off the
+        # event loop too.
+        persisted = await run_in_threadpool(
+            persist_session,
             session_id=session_id,
             metadata={
                 "user_id": user_id,
@@ -171,7 +192,8 @@ async def detect_ball(
     search_half_width: int = Form(None),
 ):
     data = await frame.read()
-    result = detect_ball_in_frame(
+    result = await run_in_threadpool(
+        detect_ball_in_frame,
         data, center_x=center_x, search_half_width=search_half_width
     )
     return JSONResponse(result)
