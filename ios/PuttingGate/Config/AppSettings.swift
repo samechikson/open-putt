@@ -8,12 +8,13 @@ final class AppSettings: ObservableObject {
 
     // MARK: Backend
 
-    /// Base URL of the backend, e.g. "http://192.168.1.20:8000".
-    @AppStorage("backendBaseURL") var backendBaseURL: String = ""
+    /// Base URL of the deployed backend on Fly.io. Hardcoded so the app always
+    /// talks to production; not user-configurable.
+    static let backendBaseURL = "https://putting-gate-backend.fly.dev"
 
     /// Path appended to the base URL for video uploads. Points at the
     /// multi-putt session analyzer, which persists the session and its putts.
-    @AppStorage("uploadPath") var uploadPath: String = "/analyze-session"
+    static let uploadPath = "/analyze-session"
 
     // MARK: Capture
 
@@ -25,15 +26,9 @@ final class AppSettings: ObservableObject {
         set { capturePresetRaw = newValue.rawValue }
     }
 
-    /// Resolved upload endpoint, or nil if the base URL is not a valid URL.
+    /// Resolved upload endpoint on the deployed backend.
     var uploadURL: URL? {
-        let trimmedBase = backendBaseURL.trimmingCharacters(in: .whitespaces)
-        guard !trimmedBase.isEmpty,
-              var components = URLComponents(string: trimmedBase) else { return nil }
-        let base = trimmedBase.hasSuffix("/") ? String(trimmedBase.dropLast()) : trimmedBase
-        let path = uploadPath.hasPrefix("/") ? uploadPath : "/" + uploadPath
-        components = URLComponents(string: base + path) ?? components
-        return components.url
+        URL(string: Self.backendBaseURL + Self.uploadPath)
     }
 }
 
