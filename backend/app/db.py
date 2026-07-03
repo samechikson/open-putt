@@ -31,10 +31,10 @@ def _get_client():
     _client_ready = True
 
     url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    key = os.environ.get("SUPABASE_SECRET_KEY")
     if not url or not key:
         logger.warning(
-            "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set — session persistence "
+            "SUPABASE_URL / SUPABASE_SECRET_KEY not set — session persistence "
             "is disabled."
         )
         _client = None

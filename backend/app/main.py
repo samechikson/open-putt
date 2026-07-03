@@ -13,9 +13,18 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Putting Gate Analyzer")
 
+# Allowed browser origins. Defaults cover local dev; set CORS_ALLOW_ORIGINS to a
+# comma-separated list (e.g. the deployed frontend URL) in production.
+_default_origins = "http://localhost:5173,http://localhost:3000"
+allow_origins = [
+    o.strip()
+    for o in os.environ.get("CORS_ALLOW_ORIGINS", _default_origins).split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=allow_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

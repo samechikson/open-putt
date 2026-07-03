@@ -86,7 +86,9 @@ export const DEFAULT_CAL: CalibrationValues = {
   gateWidthMm: 100,
 };
 
-export const API_BASE = "http://localhost:8000";
+// Backend base URL. Defaults to the local dev server; set VITE_API_BASE to the
+// deployed Fly.io URL in production (see .env.production).
+export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
 // Estimate a clip's frame rate by briefly (muted) playing it and measuring the
 // gap between presented frames via requestVideoFrameCallback — more reliable
