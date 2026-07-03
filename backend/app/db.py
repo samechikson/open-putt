@@ -62,6 +62,8 @@ def _session_row(
         "length_feet": metadata.get("length_feet"),
         "break_type": metadata.get("break_type"),
         "video_path": metadata.get("video_path"),
+        "status": "done",
+        "error": None,
         "fps": result.get("fps"),
         "frame_count": result.get("frame_count"),
         "duration_s": result.get("duration_s"),
@@ -96,6 +98,49 @@ def _putt_row(session_id: str, putt: dict[str, Any]) -> dict[str, Any]:
         "crossing_x": crossing[0] if crossing else None,
         "crossing_y": crossing[1] if crossing else None,
     }
+
+
+def create_pending_session(
+    session_id: str, metadata: dict[str, Any]
+) -> Optional[str]:
+    """Insert (or reset) a session row in the 'queued' state before analysis.
+
+    Written up-front so the async job has a row to update and the client can
+    watch it via Realtime. Returns the id, or None when persistence is disabled.
+    """
+    client = _get_client()
+    if client is None:
+        return None
+
+    row = {
+        "id": session_id,
+        "user_id": metadata.get("user_id"),
+        "file_name": metadata.get("file_name"),
+        "captured_at": metadata.get("captured_at"),
+        "ios_duration_s": metadata.get("ios_duration_s"),
+        "length_feet": metadata.get("length_feet"),
+        "break_type": metadata.get("break_type"),
+        "status": "queued",
+        "error": None,
+        "putt_count": 0,
+    }
+    client.table("sessions").upsert(row, on_conflict="id").execute()
+    # Clear any putts from a previous analysis of the same id (re-upload).
+    client.table("putts").delete().eq("session_id", session_id).execute()
+    return session_id
+
+
+def set_session_status(
+    session_id: str, status: str, error: Optional[str] = None
+) -> None:
+    """Update a session's status (and optional error message). No-op when
+    persistence is disabled."""
+    client = _get_client()
+    if client is None:
+        return
+    client.table("sessions").update({"status": status, "error": error}).eq(
+        "id", session_id
+    ).execute()
 
 
 def persist_session(

@@ -1,11 +1,10 @@
 import { useState, useCallback } from "react";
 import VideoCard from "./VideoCard";
-import SessionCard from "./SessionCard";
+import SessionUploader from "./SessionUploader";
 import {
   biasWord,
   golferSide,
   type AnalysisResult,
-  type SessionResult,
 } from "./analysis";
 import { mean, stdev } from "./stats";
 
@@ -16,26 +15,28 @@ interface VideoItem {
   file: File;
 }
 
-// Upload + analyze flow. A completed Full Session upload is persisted to
-// Supabase by the backend (tagged with the signed-in user), so it shows up on
-// the dashboard afterwards.
-export default function AnalyzeView({ onBack }: { onBack: () => void }) {
+interface AnalyzeViewProps {
+  onBack: () => void;
+  // Called once a Full Session upload is queued, with its new session id, so
+  // the app can navigate to the session's page to watch it process.
+  onSessionCreated: (sessionId: string) => void;
+}
+
+// Upload flow. Individual Putts are analyzed in-browser and shown inline (short
+// clips, not persisted). A Full Session is queued for background analysis on the
+// server and the app navigates to its session page.
+export default function AnalyzeView({
+  onBack,
+  onSessionCreated,
+}: AnalyzeViewProps) {
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [results, setResults] = useState<Record<string, AnalysisResult | null>>(
     {},
   );
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [overflowNote, setOverflowNote] = useState(false);
-  // Session mode: one video holding several putts, split up by the backend.
   // The two upload paths are alternatives, so picking one clears the other.
-  const [session, setSession] = useState<{ id: string; file: File } | null>(
-    null,
-  );
-  // undefined = pipeline not finished yet, null = it failed (like `results`).
-  const [sessionResult, setSessionResult] = useState<
-    SessionResult | null | undefined
-  >(undefined);
-  const [sessionBusy, setSessionBusy] = useState(false);
+  const [sessionFile, setSessionFile] = useState<File | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -47,21 +48,15 @@ export default function AnalyzeView({ onBack }: { onBack: () => void }) {
     setVideos(items);
     setResults({});
     setBusy({});
-    setSession(null);
-    setSessionResult(undefined);
-    setSessionBusy(false);
+    setSessionFile(null);
     // Allow re-selecting the same files to re-trigger.
     e.target.value = "";
   };
 
-  const handleSessionFileChange = (
-    e: React.ChangeEvent<HTMLInputElement>,
-  ) => {
+  const handleSessionFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setSession({ id: `${Date.now()}-${file.name}`, file });
-    setSessionResult(undefined);
-    setSessionBusy(false);
+    setSessionFile(file);
     setVideos([]);
     setResults({});
     setBusy({});
@@ -80,32 +75,18 @@ export default function AnalyzeView({ onBack }: { onBack: () => void }) {
     setBusy((prev) => (prev[id] === b ? prev : { ...prev, [id]: b }));
   }, []);
 
-  const handleSessionResult = useCallback((result: SessionResult | null) => {
-    setSessionResult(result);
-  }, []);
-
-  const handleSessionBusy = useCallback((b: boolean) => {
-    setSessionBusy(b);
-  }, []);
-
   const handleReset = useCallback(() => {
     setVideos([]);
     setResults({});
     setBusy({});
     setOverflowNote(false);
-    setSession(null);
-    setSessionResult(undefined);
-    setSessionBusy(false);
+    setSessionFile(null);
   }, []);
 
-  // Aggregate over putts that produced a usable offset — the per-video results
-  // in single-putt mode, or the putts split out of the session video.
-  const candidates: (AnalysisResult | null | undefined)[] = session
-    ? (sessionResult?.putts ?? [])
-    : videos.map((v) => results[v.id]);
-  const valid = candidates.filter(
-    (r): r is AnalysisResult => !!r && r.offset_mm !== null,
-  );
+  // Aggregate over individual-putt results that produced a usable offset.
+  const valid = videos
+    .map((v) => results[v.id])
+    .filter((r): r is AnalysisResult => !!r && r.offset_mm !== null);
   const offsets = valid.map((r) => r.offset_mm as number);
   const speeds = valid
     .map((r) => r.speed_mps)
@@ -113,22 +94,18 @@ export default function AnalyzeView({ onBack }: { onBack: () => void }) {
 
   const avgAbsOffset = mean(offsets.map(Math.abs));
   const bias = mean(offsets); // raw image-space mean; golferSide flips it face-on
-  // Spread of gate speeds across putts — how consistent the player's pace is.
   const speedDispersion = stdev(speeds);
 
   const biasSide = bias == null ? "center" : golferSide(bias);
   const biasLabel = biasWord(biasSide); // "push" (right) / "pull" (left)
-  // Per-putt tallies: right of target = push, left = pull.
   const sides = offsets.map(golferSide);
   const pushes = sides.filter((s) => s === "right").length;
   const pulls = sides.filter((s) => s === "left").length;
   const analyzedCount = valid.length;
-  // A video is still processing while its card reports busy, or before it has
-  // reported any terminal result (undefined = pipeline not finished yet).
-  const anyProcessing = session
-    ? sessionBusy || sessionResult === undefined
-    : videos.some((v) => busy[v.id] || results[v.id] === undefined);
-  const haveUploads = videos.length > 0 || session !== null;
+  const anyProcessing = videos.some(
+    (v) => busy[v.id] || results[v.id] === undefined,
+  );
+  const haveUploads = videos.length > 0 || sessionFile !== null;
 
   const fmt = (n: number | null, digits = 1) =>
     n == null ? "—" : n.toFixed(digits);
@@ -191,7 +168,7 @@ export default function AnalyzeView({ onBack }: { onBack: () => void }) {
               Full Session
             </h2>
             <p className="text-xs text-[#888] mb-3">
-              One video with several putts — split up automatically
+              One video with several putts — analyzed in the background
             </p>
             <input
               type="file"
@@ -203,84 +180,80 @@ export default function AnalyzeView({ onBack }: { onBack: () => void }) {
         </div>
       )}
 
-      {/* Summary */}
-      {haveUploads && (
-        <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5 mb-6">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-xs font-semibold uppercase tracking-widest text-[#aaa]">
-              Session Averages
-            </h2>
-            <span className="text-xs text-[#888] flex items-center gap-2">
-              {anyProcessing && (
-                <span className="w-3.5 h-3.5 border-2 border-[#22c55e] border-t-transparent rounded-full animate-spin" />
-              )}
-              {anyProcessing ? "Analyzing… " : ""}
-              {session
-                ? `${analyzedCount} putt${analyzedCount === 1 ? "" : "s"} found`
-                : `${analyzedCount} of ${videos.length} analyzed`}
-            </span>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-              <div className="offset-value">{fmt(avgAbsOffset)} mm</div>
-              <p className="text-sm text-[#aaa] -mt-1">avg offset (accuracy)</p>
-            </div>
-            <div>
-              <div className="offset-value">
-                {bias == null ? "—" : `${Math.abs(bias).toFixed(1)} mm`}
-              </div>
-              <p className="text-sm text-[#aaa] -mt-1">
-                {bias == null
-                  ? "directional bias"
-                  : biasSide === "center"
-                    ? "no directional bias"
-                    : `${biasLabel} bias`}
-              </p>
-            </div>
-            <div>
-              <div className="offset-value">
-                {speedDispersion == null ? "—" : `± ${speedDispersion.toFixed(2)}`} m/s
-              </div>
-              <p className="text-sm text-[#aaa] -mt-1">
-                speed dispersion (consistency)
-              </p>
-            </div>
-          </div>
-          <div className="flex gap-6 mt-4 pt-4 border-t border-[#333] text-sm">
-            <span className="text-[#aaa]">
-              Pushes <span className="text-white font-semibold">{pushes}</span>
-            </span>
-            <span className="text-[#aaa]">
-              Pulls <span className="text-white font-semibold">{pulls}</span>
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* Per-video cards */}
-      {videos.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {videos.map((v, i) => (
-            <VideoCard
-              key={v.id}
-              id={v.id}
-              index={i}
-              file={v.file}
-              onResult={handleResult}
-              onBusyChange={handleBusy}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Session card */}
-      {session && (
-        <SessionCard
-          key={session.id}
-          file={session.file}
-          onResult={handleSessionResult}
-          onBusyChange={handleSessionBusy}
+      {/* Full Session: queue for background analysis, then navigate to it. */}
+      {sessionFile && (
+        <SessionUploader
+          file={sessionFile}
+          onCreated={onSessionCreated}
+          onCancel={handleReset}
         />
+      )}
+
+      {/* Individual Putts: summary + per-video cards (synchronous). */}
+      {videos.length > 0 && (
+        <>
+          <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5 mb-6">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-xs font-semibold uppercase tracking-widest text-[#aaa]">
+                Session Averages
+              </h2>
+              <span className="text-xs text-[#888] flex items-center gap-2">
+                {anyProcessing && (
+                  <span className="w-3.5 h-3.5 border-2 border-[#22c55e] border-t-transparent rounded-full animate-spin" />
+                )}
+                {anyProcessing ? "Analyzing… " : ""}
+                {`${analyzedCount} of ${videos.length} analyzed`}
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <div className="offset-value">{fmt(avgAbsOffset)} mm</div>
+                <p className="text-sm text-[#aaa] -mt-1">avg offset (accuracy)</p>
+              </div>
+              <div>
+                <div className="offset-value">
+                  {bias == null ? "—" : `${Math.abs(bias).toFixed(1)} mm`}
+                </div>
+                <p className="text-sm text-[#aaa] -mt-1">
+                  {bias == null
+                    ? "directional bias"
+                    : biasSide === "center"
+                      ? "no directional bias"
+                      : `${biasLabel} bias`}
+                </p>
+              </div>
+              <div>
+                <div className="offset-value">
+                  {speedDispersion == null ? "—" : `± ${speedDispersion.toFixed(2)}`} m/s
+                </div>
+                <p className="text-sm text-[#aaa] -mt-1">
+                  speed dispersion (consistency)
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-6 mt-4 pt-4 border-t border-[#333] text-sm">
+              <span className="text-[#aaa]">
+                Pushes <span className="text-white font-semibold">{pushes}</span>
+              </span>
+              <span className="text-[#aaa]">
+                Pulls <span className="text-white font-semibold">{pulls}</span>
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {videos.map((v, i) => (
+              <VideoCard
+                key={v.id}
+                id={v.id}
+                index={i}
+                file={v.file}
+                onResult={handleResult}
+                onBusyChange={handleBusy}
+              />
+            ))}
+          </div>
+        </>
       )}
     </>
   );

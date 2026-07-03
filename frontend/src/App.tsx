@@ -50,7 +50,10 @@ function App() {
           />
         )}
         {view.name === "analyze" && (
-          <AnalyzeView onBack={() => setView({ name: "dashboard" })} />
+          <AnalyzeView
+            onBack={() => setView({ name: "dashboard" })}
+            onSessionCreated={(id) => setView({ name: "session", id })}
+          />
         )}
         {view.name === "session" && (
           <SessionDetail

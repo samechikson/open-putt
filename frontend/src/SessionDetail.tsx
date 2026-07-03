@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   fetchSession,
   fetchPutts,
+  subscribeToSession,
   type SessionRow,
   type PuttRow,
 } from "./sessions";
@@ -20,36 +21,57 @@ export default function SessionDetail({
   const [session, setSession] = useState<SessionRow | null | undefined>(
     undefined,
   );
-  const [putts, setPutts] = useState<PuttRow[] | null | undefined>(undefined);
-  const [error, setError] = useState<string | null>(null);
+  const [putts, setPutts] = useState<PuttRow[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([fetchSession(sessionId), fetchPutts(sessionId)])
-      .then(([s, p]) => {
+
+    // When a session reaches 'done', pull its putts in.
+    const loadPutts = () => {
+      fetchPutts(sessionId)
+        .then((rows) => {
+          if (!cancelled) setPutts(rows);
+        })
+        .catch(() => {
+          /* putts are secondary; the status drives the UI */
+        });
+    };
+
+    fetchSession(sessionId)
+      .then((row) => {
         if (cancelled) return;
-        setSession(s);
-        setPutts(p);
+        setSession(row);
+        if (row?.status === "done") loadPutts();
       })
       .catch((e: unknown) => {
         if (cancelled) return;
-        setError(e instanceof Error ? e.message : "Failed to load session");
+        setLoadError(e instanceof Error ? e.message : "Failed to load session");
         setSession(null);
-        setPutts(null);
       });
+
+    // Watch for background-analysis transitions (queued/processing → done/error).
+    const unsubscribe = subscribeToSession(sessionId, (row) => {
+      if (cancelled) return;
+      setSession(row);
+      if (row.status === "done") loadPutts();
+    });
+
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, [sessionId]);
 
-  const rows = putts ?? [];
-  const offsets = rows
+  const status = session?.status;
+  const pending = status === "queued" || status === "processing";
+
+  const offsets = putts
     .map((p) => p.offset_mm)
     .filter((o): o is number => o != null);
-  const speeds = rows
+  const speeds = putts
     .map((p) => p.speed_mps)
     .filter((s): s is number => s != null);
-
   const avgAbsOffset = mean(offsets.map(Math.abs));
   const bias = mean(offsets);
   const speedDispersion = stdev(speeds);
@@ -73,24 +95,46 @@ export default function SessionDetail({
         </button>
       </div>
 
-      {putts === undefined && (
+      {session === undefined && (
         <div className="flex items-center gap-2 text-sm text-[#888]">
           <span className="w-3.5 h-3.5 border-2 border-[#22c55e] border-t-transparent rounded-full animate-spin" />
           Loading…
         </div>
       )}
 
-      {(session === null || putts === null) && (
+      {session === null && (
         <div className="bg-[#1a1a1a] border border-[#3a2020] rounded-xl p-5 text-sm text-[#f87171]">
-          {error ?? "Failed to load session."}
+          {loadError ?? "Failed to load session."}
         </div>
       )}
 
-      {putts && (
+      {pending && (
+        <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-8 text-center">
+          <div className="flex items-center justify-center gap-2 text-[#aaa]">
+            <span className="w-4 h-4 border-2 border-[#22c55e] border-t-transparent rounded-full animate-spin" />
+            {status === "queued"
+              ? "Queued for analysis…"
+              : "Analyzing your putts…"}
+          </div>
+          <p className="text-xs text-[#666] mt-2">
+            This can take a few minutes for a long clip. You can leave this page;
+            it'll keep processing.
+          </p>
+        </div>
+      )}
+
+      {status === "error" && (
+        <div className="bg-[#1a1a1a] border border-[#3a2020] rounded-xl p-5 text-sm text-[#f87171]">
+          {session?.error ?? "Analysis failed."}
+        </div>
+      )}
+
+      {status === "done" && (
         <>
           <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5 mb-6">
             <h3 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-3">
-              Session Averages · {rows.length} putt{rows.length === 1 ? "" : "s"}
+              Session Averages · {putts.length} putt
+              {putts.length === 1 ? "" : "s"}
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
@@ -123,7 +167,7 @@ export default function SessionDetail({
             </div>
           </div>
 
-          {rows.length > 0 && (
+          {putts.length > 0 && (
             <div className="bg-[#1a1a1a] border border-[#333] rounded-xl overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
@@ -135,7 +179,7 @@ export default function SessionDetail({
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((p) => (
+                  {putts.map((p) => (
                     <tr
                       key={p.putt_index}
                       className="border-b border-[#262626] last:border-0"

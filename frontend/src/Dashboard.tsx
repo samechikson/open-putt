@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
-import { fetchSessions, type SessionRow } from "./sessions";
+import {
+  fetchSessions,
+  type SessionRow,
+  type SessionStatus,
+} from "./sessions";
 
 interface DashboardProps {
   onNewSession: () => void;
@@ -13,6 +17,27 @@ function formatDate(iso: string): string {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+const STATUS_STYLE: Record<SessionStatus, string> = {
+  queued: "bg-[#3a3320] text-[#f0b429]",
+  processing: "bg-[#3a3320] text-[#f0b429]",
+  done: "bg-[#1e3320] text-[#22c55e]",
+  error: "bg-[#3a2020] text-[#f87171]",
+};
+
+function StatusBadge({ status }: { status: SessionStatus }) {
+  const label =
+    status === "processing"
+      ? "Processing"
+      : status.charAt(0).toUpperCase() + status.slice(1);
+  return (
+    <span
+      className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${STATUS_STYLE[status]}`}
+    >
+      {label}
+    </span>
+  );
 }
 
 export default function Dashboard({
@@ -92,8 +117,11 @@ export default function Dashboard({
               className="text-left bg-[#1a1a1a] border border-[#333] hover:bg-[#222] hover:border-[#444] rounded-xl p-4 transition-all cursor-pointer flex items-center justify-between gap-4"
             >
               <div className="min-w-0">
-                <div className="text-white font-medium truncate">
-                  {s.file_name ?? "Session"}
+                <div className="flex items-center gap-2">
+                  <span className="text-white font-medium truncate">
+                    {s.file_name ?? "Session"}
+                  </span>
+                  {s.status !== "done" && <StatusBadge status={s.status} />}
                 </div>
                 <div className="text-xs text-[#888] mt-0.5">
                   {formatDate(s.captured_at ?? s.created_at)}
@@ -102,13 +130,19 @@ export default function Dashboard({
                 </div>
               </div>
               <div className="text-right shrink-0">
-                <div className="text-white font-semibold">
-                  {s.putt_count} putt{s.putt_count === 1 ? "" : "s"}
-                </div>
-                {s.duration_s != null && (
-                  <div className="text-xs text-[#888]">
-                    {s.duration_s.toFixed(1)}s
-                  </div>
+                {s.status === "done" ? (
+                  <>
+                    <div className="text-white font-semibold">
+                      {s.putt_count} putt{s.putt_count === 1 ? "" : "s"}
+                    </div>
+                    {s.duration_s != null && (
+                      <div className="text-xs text-[#888]">
+                        {s.duration_s.toFixed(1)}s
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <span className="text-[#666] text-lg">›</span>
                 )}
               </div>
             </button>
