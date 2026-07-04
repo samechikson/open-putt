@@ -130,6 +130,22 @@ def create_pending_session(
     return session_id
 
 
+def get_session_video_path(session_id: str) -> Optional[str]:
+    """Return the retained GCS object path for a session's video, or None."""
+    client = _get_client()
+    if client is None:
+        return None
+    resp = (
+        client.table("sessions")
+        .select("video_path")
+        .eq("id", session_id)
+        .limit(1)
+        .execute()
+    )
+    rows = resp.data or []
+    return rows[0].get("video_path") if rows else None
+
+
 def set_session_status(
     session_id: str, status: str, error: Optional[str] = None
 ) -> None:

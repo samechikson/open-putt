@@ -18,10 +18,21 @@ export interface SessionRow {
   segments_detected: number | null;
   status: SessionStatus;
   error: string | null;
+  video_path: string | null;
 }
 
 const SESSION_COLUMNS =
-  "id,created_at,captured_at,file_name,length_feet,break_type,putt_count,duration_s,segments_detected,status,error";
+  "id,created_at,captured_at,file_name,length_feet,break_type,putt_count,duration_s,segments_detected,status,error,video_path";
+
+// A short-lived signed URL to stream a session's retained video.
+export async function fetchSessionVideoUrl(sessionId: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/sessions/${sessionId}/video`);
+  if (!res.ok) {
+    throw new Error(await detailFromResponse(res, "Could not load video"));
+  }
+  const body = (await res.json()) as { url: string };
+  return body.url;
+}
 
 async function detailFromResponse(res: Response, fallback: string): Promise<string> {
   try {

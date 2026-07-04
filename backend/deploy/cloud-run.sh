@@ -39,8 +39,13 @@ gcloud artifacts repositories create "$REPO" \
 
 # ---- 3. Cloud Storage bucket (+ 1-day lifecycle cleanup) --------------------
 gcloud storage buckets create "$BUCKET" --location="$REGION" --uniform-bucket-level-access || true
+# Transient uploads under uploads/ are deleted after 1 day; retained session
+# videos under sessions/ are kept 90 days for playback.
 cat > /tmp/lifecycle.json <<'JSON'
-{"rule":[{"action":{"type":"Delete"},"condition":{"age":1}}]}
+{"rule":[
+  {"action":{"type":"Delete"},"condition":{"age":1,"matchesPrefix":["uploads/"]}},
+  {"action":{"type":"Delete"},"condition":{"age":90,"matchesPrefix":["sessions/"]}}
+]}
 JSON
 gcloud storage buckets update "$BUCKET" --lifecycle-file=/tmp/lifecycle.json
 

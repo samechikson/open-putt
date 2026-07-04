@@ -28,6 +28,8 @@ TASKS_INTERNAL_TOKEN = os.environ.get("TASKS_INTERNAL_TOKEN")
 GCS_SIGNER_SA = os.environ.get("GCS_SIGNER_SA")
 # How long a browser/iOS client has to PUT the video to the signed URL.
 UPLOAD_URL_TTL = timedelta(minutes=30)
+# How long a signed playback URL stays valid.
+DOWNLOAD_URL_TTL = timedelta(hours=1)
 
 # Cloud Tasks adds this header to the /process request; the handler checks it.
 TASK_TOKEN_HEADER = "X-Tasks-Token"
@@ -87,13 +89,24 @@ def object_exists(object_name: str) -> bool:
     return _bucket().blob(object_name).exists()
 
 
-def generate_upload_url(object_name: str) -> str:
-    """A short-lived V4 signed URL the client PUTs the video to directly.
+def copy_gcs_object(src: str, dst: str) -> None:
+    """Server-side copy within the bucket (no download). Blocking."""
+    bucket = _bucket()
+    bucket.copy_blob(bucket.blob(src), bucket, dst)
+
+
+def retained_object_name(upload_object_name: str) -> str:
+    """Path under the retained `sessions/` prefix (kept 90 days) for a clip that
+    was uploaded to the transient `uploads/` prefix (deleted after 1 day)."""
+    return "sessions/" + upload_object_name.removeprefix("uploads/")
+
+
+def _signed_url(object_name: str, method: str, ttl: timedelta) -> str:
+    """A short-lived V4 signed URL for the object.
 
     On Cloud Run the runtime credentials have no private key, so signing goes
     through the IAM signBlob API — the signer service account (`GCS_SIGNER_SA`)
-    must hold `roles/iam.serviceAccountTokenCreator` on itself. Content-Type is
-    intentionally not signed, so clients may PUT with any/no Content-Type.
+    must hold `roles/iam.serviceAccountTokenCreator` on itself.
     """
     from google.auth import default as google_default
     from google.auth.transport.requests import Request as AuthRequest
@@ -103,11 +116,22 @@ def generate_upload_url(object_name: str) -> str:
     signer_email = GCS_SIGNER_SA or getattr(creds, "service_account_email", None)
     return _bucket().blob(object_name).generate_signed_url(
         version="v4",
-        expiration=UPLOAD_URL_TTL,
-        method="PUT",
+        expiration=ttl,
+        method=method,
         service_account_email=signer_email,
         access_token=creds.token,
     )
+
+
+def generate_upload_url(object_name: str) -> str:
+    """Signed URL the client PUTs the video to directly. Content-Type is not
+    signed, so clients may PUT with any/no Content-Type."""
+    return _signed_url(object_name, "PUT", UPLOAD_URL_TTL)
+
+
+def generate_download_url(object_name: str) -> str:
+    """Signed URL the frontend uses to stream a retained session video."""
+    return _signed_url(object_name, "GET", DOWNLOAD_URL_TTL)
 
 
 def delete_gcs_object(object_name: str) -> None:

@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   fetchSession,
   fetchPutts,
+  fetchSessionVideoUrl,
   subscribeToSession,
   type SessionRow,
   type PuttRow,
@@ -23,6 +24,28 @@ export default function SessionDetail({
   );
   const [putts, setPutts] = useState<PuttRow[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  // When playing a single putt, pause once its segment ends.
+  const puttEndRef = useRef<number | null>(null);
+
+  // Jump the player to a putt and play just its segment.
+  const playPutt = (p: PuttRow) => {
+    const video = videoRef.current;
+    if (!video || p.start_s == null) return;
+    puttEndRef.current = p.end_s ?? null;
+    video.currentTime = p.start_s;
+    void video.play();
+  };
+
+  const handleTimeUpdate = () => {
+    const video = videoRef.current;
+    if (!video || puttEndRef.current == null) return;
+    if (video.currentTime >= puttEndRef.current) {
+      video.pause();
+      puttEndRef.current = null;
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -38,11 +61,29 @@ export default function SessionDetail({
         });
     };
 
+    // A finished session with a retained video: fetch a signed playback URL.
+    const loadVideo = (row: SessionRow) => {
+      if (row.status !== "done" || !row.video_path) return;
+      fetchSessionVideoUrl(sessionId)
+        .then((url) => {
+          if (!cancelled) setVideoUrl(url);
+        })
+        .catch(() => {
+          /* playback is optional; stats still render */
+        });
+    };
+
     fetchSession(sessionId)
       .then((row) => {
-        if (cancelled) return;
+        if (cancelled || !row) {
+          if (!cancelled) setSession(row);
+          return;
+        }
         setSession(row);
-        if (row?.status === "done") loadPutts();
+        if (row.status === "done") {
+          loadPutts();
+          loadVideo(row);
+        }
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -54,7 +95,10 @@ export default function SessionDetail({
     const unsubscribe = subscribeToSession(sessionId, (row) => {
       if (cancelled) return;
       setSession(row);
-      if (row.status === "done") loadPutts();
+      if (row.status === "done") {
+        loadPutts();
+        loadVideo(row);
+      }
     });
 
     return () => {
@@ -131,6 +175,22 @@ export default function SessionDetail({
 
       {status === "done" && (
         <>
+          {videoUrl && (
+            <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-3 mb-6">
+              <video
+                ref={videoRef}
+                src={videoUrl}
+                controls
+                playsInline
+                onTimeUpdate={handleTimeUpdate}
+                className="w-full max-h-[28rem] rounded-lg bg-black"
+              />
+              <p className="text-xs text-[#666] mt-2 px-1">
+                Tap a putt below to jump to it.
+              </p>
+            </div>
+          )}
+
           <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5 mb-6">
             <h3 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-3">
               Session Averages · {putts.length} putt
@@ -182,9 +242,13 @@ export default function SessionDetail({
                   {putts.map((p) => (
                     <tr
                       key={p.putt_index}
-                      className="border-b border-[#262626] last:border-0"
+                      onClick={videoUrl ? () => playPutt(p) : undefined}
+                      className={`border-b border-[#262626] last:border-0 ${
+                        videoUrl ? "cursor-pointer hover:bg-[#222]" : ""
+                      }`}
                     >
                       <td className="px-4 py-3 text-[#aaa]">
+                        {videoUrl && <span className="text-[#22c55e] mr-1">▶</span>}
                         {p.putt_index + 1}
                       </td>
                       <td className="px-4 py-3 text-white">

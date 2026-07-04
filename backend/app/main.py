@@ -9,7 +9,12 @@ import uuid
 import hmac
 from typing import Optional
 from .analyzer import CalibrationError, analyze_putt, analyze_session, detect_ball_in_frame
-from .db import persist_session, create_pending_session, set_session_status
+from .db import (
+    persist_session,
+    create_pending_session,
+    set_session_status,
+    get_session_video_path,
+)
 from . import cloud
 
 logger = logging.getLogger(__name__)
@@ -261,7 +266,11 @@ async def process_session(
             await _record_error(session_id, object_name, _no_putts_message(result))
             return JSONResponse({"status": "error"})
 
-        # persist_session upserts the full row (status 'done') and its putts.
+        # Retain the video for playback: copy it to the 90-day `sessions/` prefix
+        # and record the path, then drop the transient `uploads/` copy.
+        retained = cloud.retained_object_name(object_name)
+        await run_in_threadpool(cloud.copy_gcs_object, object_name, retained)
+        metadata = {**metadata, "video_path": retained}
         await run_in_threadpool(persist_session, session_id, metadata, result)
         await run_in_threadpool(cloud.delete_gcs_object, object_name)
         return JSONResponse({"status": "done"})
@@ -300,3 +309,19 @@ async def detect_ball(
         data, center_x=center_x, search_half_width=search_half_width
     )
     return JSONResponse(result)
+
+
+@app.get("/sessions/{session_id}/video")
+async def session_video_url(session_id: str):
+    """Return a short-lived signed URL to stream a session's retained video.
+
+    The session id is an unguessable UUID and the URL expires quickly; there's
+    no ownership check (the row itself is RLS-protected in Supabase).
+    """
+    if not cloud.tasks_enabled():
+        raise HTTPException(status_code=503, detail="Video storage is not configured.")
+    video_path = await run_in_threadpool(get_session_video_path, session_id)
+    if not video_path:
+        raise HTTPException(status_code=404, detail="No video for this session.")
+    url = await run_in_threadpool(cloud.generate_download_url, video_path)
+    return JSONResponse({"url": url})
