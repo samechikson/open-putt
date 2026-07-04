@@ -91,11 +91,13 @@ def _detect_laser_dots(frame: np.ndarray) -> list[tuple[float, float]]:
 
     The dots are the only saturated-red, near-white-hot points in the scene, so a
     simple red-dominance threshold separates them from the neutral carpet, the
-    white ball, and the dark putter. Returns 0, 1, or 2 points.
+    white ball, and the dark putter. Returns 0, 1, or 2 points. Thresholds are
+    deliberately permissive: on the ultra-wide (0.5x) lens the dots are small and
+    dim (redness ~40, r ~150) compared with the standard lens.
     """
     b, g, r = cv2.split(frame.astype(np.int16))
     redness = r - np.maximum(g, b)
-    mask = ((redness > 60) & (r > 170)).astype(np.uint8) * 255
+    mask = ((redness > 35) & (r > 140)).astype(np.uint8) * 255
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
 
     h, w = frame.shape[:2]
@@ -105,7 +107,7 @@ def _detect_laser_dots(frame: np.ndarray) -> list[tuple[float, float]]:
     blobs: list[tuple[int, float, float]] = []
     for i in range(1, num):  # skip background label 0
         area = int(stats[i, cv2.CC_STAT_AREA])
-        if area < 6 or area > max_area:
+        if area < 4 or area > max_area:
             continue
         cx, cy = centroids[i]
         blobs.append((area, float(cx), float(cy)))
@@ -653,10 +655,12 @@ def _calibrate(
 ) -> tuple[Optional[dict], str]:
     """Derive gate, aim line and scale from one quiet frame.
 
-    The bottom laser dot anchors the gate; the top dot (when present) marks the
-    ball at rest and starts the aim line. Scale comes from the resting ball's
-    radius via the standardized golf-ball diameter, unless both gate-width
-    overrides are supplied. Returns ``(calibration, "")`` or ``(None, reason)``.
+    Only the bottom laser dot is used — it anchors the gate. The aim line runs
+    from the ball at address through that gate dot, so the ball itself provides
+    the near end of the line (the old top dot is ignored; on the ultra-wide lens
+    it's too dim to rely on). Scale comes from the resting ball's radius via the
+    standardized golf-ball diameter, unless both gate-width overrides are
+    supplied. Returns ``(calibration, "")`` or ``(None, reason)``.
     """
     h, w = frame.shape[:2]
     min_r = max(8, w // 60)
@@ -665,23 +669,11 @@ def _calibrate(
     lasers = _detect_laser_dots(frame)
     if not lasers:
         return None, "no laser dots detected"
-    bottom = lasers[-1]
-    top = lasers[0] if len(lasers) >= 2 else None
+    bottom = lasers[-1]  # gate anchor (bottom-most dot)
 
+    # The ball at address anchors both the scale and the near end of the aim line.
     candidates = _white_ball_candidates(frame, min_r, max_r)
-    ball: Optional[tuple[float, float, float]] = None
-    if top is not None and candidates:
-        nearest = min(
-            candidates,
-            key=lambda c: (c[0] - top[0]) ** 2 + (c[1] - top[1]) ** 2,
-        )
-        dist = ((nearest[0] - top[0]) ** 2 + (nearest[1] - top[1]) ** 2) ** 0.5
-        # The resting ball sits on/near the ball-rest dot; anything farther is
-        # some other white blob (putter, shoe) and can't size the scale.
-        if dist <= max(6.0 * nearest[2], 0.1 * w):
-            ball = (nearest[0], nearest[1], nearest[2])
-    if ball is None:
-        ball = _pick_seed(candidates, w, h, center_x=round(bottom[0]))
+    ball = _pick_seed(candidates, w, h, center_x=round(bottom[0]))
 
     if gate_width_px and gate_width_mm:
         mm_per_px = gate_width_mm / gate_width_px
@@ -694,10 +686,13 @@ def _calibrate(
     else:
         return None, "no resting ball to derive the mm-per-px scale"
 
+    # Aim line: ball at address → bottom gate dot.
+    aim_top = [round(ball[0], 1), round(ball[1], 1)] if ball is not None else None
+
     return {
         "gate_center_x": round(bottom[0]),
         "gate_line_y": round(bottom[1]),
-        "aim_top": [round(top[0], 1), round(top[1], 1)] if top is not None else None,
+        "aim_top": aim_top,
         "ball_radius_px": round(ball[2], 1) if ball is not None else None,
         "mm_per_px": mm_per_px,
         "scale_source": scale_source,
