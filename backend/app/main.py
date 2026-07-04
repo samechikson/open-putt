@@ -14,6 +14,7 @@ from .db import (
     create_pending_session,
     set_session_status,
     get_session_video_path,
+    delete_session,
 )
 from . import cloud
 
@@ -325,3 +326,17 @@ async def session_video_url(session_id: str):
         raise HTTPException(status_code=404, detail="No video for this session.")
     url = await run_in_threadpool(cloud.generate_download_url, video_path)
     return JSONResponse({"url": url})
+
+
+@app.delete("/sessions/{session_id}")
+async def delete_session_endpoint(session_id: str):
+    """Delete a session: its putts, the row, and the retained video. Idempotent.
+
+    No ownership check (consistent with the video endpoint): session ids are
+    unguessable UUIDs and the rows are RLS-protected in Supabase.
+    """
+    video_path = await run_in_threadpool(get_session_video_path, session_id)
+    if video_path:
+        await run_in_threadpool(cloud.delete_gcs_object, video_path)
+    await run_in_threadpool(delete_session, session_id)
+    return JSONResponse({"status": "deleted"})

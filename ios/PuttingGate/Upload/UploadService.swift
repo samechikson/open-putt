@@ -116,6 +116,22 @@ final class UploadService: NSObject, ObservableObject {
         task.resume()
     }
 
+    /// Best-effort delete of the backend session (putts, row, retained video) for
+    /// a recording being removed locally. The recording id is the session id.
+    func deleteRemoteSession(recordingID: UUID) {
+        guard let url = URL(
+            string: AppSettings.backendBaseURL + "/sessions/\(recordingID.uuidString)"
+        ) else { return }
+        Task {
+            var req = URLRequest(url: url)
+            req.httpMethod = "DELETE"
+            if let token = await auth.validAccessToken() {
+                req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            _ = try? await URLSession.shared.data(for: req)
+        }
+    }
+
     /// Cancel any in-flight upload for a recording — call before deleting it so a
     /// running task doesn't read a file that's about to be removed.
     func cancelUpload(recordingID: UUID) {

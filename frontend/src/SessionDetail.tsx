@@ -3,6 +3,7 @@ import {
   fetchSession,
   fetchPutts,
   fetchSessionVideoUrl,
+  deleteSession,
   subscribeToSession,
   type SessionRow,
   type PuttRow,
@@ -124,19 +125,49 @@ export default function SessionDetail({
   const fmt = (n: number | null, digits = 1) =>
     n == null ? "—" : n.toFixed(digits);
 
+  const [deleting, setDeleting] = useState(false);
+  const handleDelete = async () => {
+    if (
+      !window.confirm(
+        "Delete this session, its putts and video? This can't be undone.",
+      )
+    )
+      return;
+    setDeleting(true);
+    try {
+      await deleteSession(sessionId);
+      onBack();
+    } catch (e) {
+      setDeleting(false);
+      setLoadError(e instanceof Error ? e.message : "Could not delete session");
+    }
+  };
+
   return (
     <>
       <div className="flex items-center justify-between gap-4 mb-6">
         <h2 className="text-xl font-bold text-white truncate">
           {session?.file_name ?? "Session"}
         </h2>
-        <button
-          type="button"
-          onClick={onBack}
-          className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-sm text-white font-medium transition-all cursor-pointer shrink-0"
-        >
-          ← Sessions
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {session && (
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={deleting}
+              className="px-4 py-2 bg-[#2a1a1a] border border-[#4a2a2a] hover:bg-[#3a2020] disabled:opacity-50 rounded-lg text-sm text-[#f87171] font-medium transition-all cursor-pointer"
+            >
+              {deleting ? "Deleting…" : "Delete"}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onBack}
+            className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
+          >
+            ← Sessions
+          </button>
+        </div>
       </div>
 
       {session === undefined && (

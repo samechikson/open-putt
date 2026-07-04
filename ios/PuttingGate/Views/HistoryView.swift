@@ -71,6 +71,8 @@ struct HistoryView: View {
             // Stop any in-flight upload first so it doesn't read the file we're
             // about to remove (which would crash uploadTask(fromFile:)).
             coordinator.uploads.cancelUpload(recordingID: recording.id)
+            // Also remove the session (putts + video) from the backend.
+            coordinator.uploads.deleteRemoteSession(recordingID: recording.id)
             try? FileManager.default.removeItem(at: recording.fileURL)
             context.delete(recording)
         }

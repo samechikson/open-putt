@@ -24,6 +24,17 @@ export interface SessionRow {
 const SESSION_COLUMNS =
   "id,created_at,captured_at,file_name,length_feet,break_type,putt_count,duration_s,segments_detected,status,error,video_path";
 
+// Delete a session and its putts + video via the backend (RLS blocks client
+// deletes, and the video lives in Cloud Storage).
+export async function deleteSession(sessionId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/sessions/${sessionId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    throw new Error(await detailFromResponse(res, "Could not delete session"));
+  }
+}
+
 // A short-lived signed URL to stream a session's retained video.
 export async function fetchSessionVideoUrl(sessionId: string): Promise<string> {
   const res = await fetch(`${API_BASE}/sessions/${sessionId}/video`);

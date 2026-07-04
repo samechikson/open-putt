@@ -146,6 +146,17 @@ def get_session_video_path(session_id: str) -> Optional[str]:
     return rows[0].get("video_path") if rows else None
 
 
+def delete_session(session_id: str) -> None:
+    """Delete a session and its putts. No-op when persistence is disabled.
+    Idempotent: deleting a missing session is not an error."""
+    client = _get_client()
+    if client is None:
+        return
+    # Putts cascade on the FK, but delete explicitly to be safe.
+    client.table("putts").delete().eq("session_id", session_id).execute()
+    client.table("sessions").delete().eq("id", session_id).execute()
+
+
 def set_session_status(
     session_id: str, status: str, error: Optional[str] = None
 ) -> None:
