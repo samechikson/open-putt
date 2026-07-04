@@ -79,7 +79,7 @@ final class CameraRecorder: NSObject, ObservableObject {
         captureSession.sessionPreset =
             settings.capturePreset == .hd1080 ? .hd1920x1080 : .hd1280x720
 
-        if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+        if let device = Self.backCaptureDevice(),
            let input = try? AVCaptureDeviceInput(device: device),
            captureSession.canAddInput(input) {
             captureSession.addInput(input)
@@ -94,6 +94,14 @@ final class CameraRecorder: NSObject, ObservableObject {
             connection.videoRotationAngle = 90 // portrait
         }
         captureSession.commitConfiguration()
+    }
+
+    /// The back camera to record with. Prefer the ultra-wide lens — that's the
+    /// native camera's "0.5×" view — and fall back to the standard wide-angle
+    /// lens on devices without an ultra-wide (e.g. iPhone SE).
+    private static func backCaptureDevice() -> AVCaptureDevice? {
+        AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .back)
+            ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
     }
 
     /// Underexpose slightly. Bright outdoor scenes otherwise overexpose the
