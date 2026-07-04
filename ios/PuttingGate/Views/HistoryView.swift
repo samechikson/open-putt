@@ -68,6 +68,9 @@ struct HistoryView: View {
     private func deleteRecordings(at offsets: IndexSet) {
         for index in offsets {
             let recording = recordings[index]
+            // Stop any in-flight upload first so it doesn't read the file we're
+            // about to remove (which would crash uploadTask(fromFile:)).
+            coordinator.uploads.cancelUpload(recordingID: recording.id)
             try? FileManager.default.removeItem(at: recording.fileURL)
             context.delete(recording)
         }

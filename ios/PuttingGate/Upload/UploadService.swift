@@ -60,12 +60,18 @@ final class UploadService: NSObject, ObservableObject {
     }
 
     private func performUpload(_ recording: Recording) async {
-        guard recording.fileExists else {
-            mark(recordingID: recording.id, state: .failed, error: "Recording file missing on disk")
+        // Capture value types up front: after the `await` below the recording may
+        // have been deleted, and touching a deleted SwiftData model is unsafe.
+        let recordingID = recording.id
+        let fileURL = recording.fileURL
+        let fileName = recording.fileName
+
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            mark(recordingID: recordingID, state: .failed, error: "Recording file missing on disk")
             return
         }
         guard let uploadsURL = settings.uploadsURL else {
-            mark(recordingID: recording.id, state: .failed, error: "No backend URL configured")
+            mark(recordingID: recordingID, state: .failed, error: "No backend URL configured")
             return
         }
 
@@ -75,28 +81,51 @@ final class UploadService: NSObject, ObservableObject {
         let signed: (objectName: String, uploadURL: URL)
         do {
             signed = try await requestUploadURL(
-                uploadsURL, recordingID: recording.id,
-                fileName: recording.fileName, accessToken: accessToken
+                uploadsURL, recordingID: recordingID,
+                fileName: fileName, accessToken: accessToken
             )
         } catch {
-            mark(recordingID: recording.id, state: .failed,
+            mark(recordingID: recordingID, state: .failed,
                  error: "Couldn't start upload: \(error.localizedDescription)")
+            return
+        }
+
+        // The recording may have been deleted while awaiting. Re-check right
+        // before creating the task (no await between here and uploadTask, so the
+        // file can't disappear underneath us) — uploadTask(fromFile:) raises an
+        // uncatchable exception if the file is missing.
+        guard fetchRecording(recordingID) != nil,
+              FileManager.default.fileExists(atPath: fileURL.path) else {
             return
         }
 
         // Step 2: PUT the video straight to Cloud Storage on the background session.
         var request = URLRequest(url: signed.uploadURL)
         request.httpMethod = "PUT"
-        let task = session.uploadTask(with: request, fromFile: recording.fileURL)
-        task.taskDescription = "\(recording.id.uuidString)|\(signed.objectName)"
-        inFlight[task.taskIdentifier] = Context(recordingID: recording.id, objectName: signed.objectName)
+        let task = session.uploadTask(with: request, fromFile: fileURL)
+        task.taskDescription = "\(recordingID.uuidString)|\(signed.objectName)"
+        inFlight[task.taskIdentifier] = Context(recordingID: recordingID, objectName: signed.objectName)
 
-        recording.uploadState = .uploading
-        recording.uploadAttempts += 1
-        recording.lastUploadError = nil
-        try? modelContainer.mainContext.save()
+        if let rec = fetchRecording(recordingID) {
+            rec.uploadState = .uploading
+            rec.uploadAttempts += 1
+            rec.lastUploadError = nil
+            try? modelContainer.mainContext.save()
+        }
 
         task.resume()
+    }
+
+    /// Cancel any in-flight upload for a recording — call before deleting it so a
+    /// running task doesn't read a file that's about to be removed.
+    func cancelUpload(recordingID: UUID) {
+        inFlight = inFlight.filter { $0.value.recordingID != recordingID }
+        let prefix = "\(recordingID.uuidString)|"
+        session.getAllTasks { tasks in
+            for task in tasks where (task.taskDescription ?? "").hasPrefix(prefix) {
+                task.cancel()
+            }
+        }
     }
 
     // MARK: Backend calls (small JSON, foreground)
