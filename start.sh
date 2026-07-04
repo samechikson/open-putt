@@ -1,6 +1,13 @@
 #!/bin/bash
 set -e
 
+# Run the whole stack locally. The backend runs in LOCAL_MODE: uploads go to a
+# local directory and analysis runs in-process, so no GCS / Cloud Tasks are
+# needed. Persistence, auth and Realtime still use the (hosted) Supabase in
+# backend/.env — point that at a separate Supabase project if you don't want
+# local testing to touch production data.
+export LOCAL_MODE=1
+
 # Backend
 cd backend
 if [ ! -d ".venv" ]; then

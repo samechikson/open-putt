@@ -12,8 +12,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import tempfile
 from datetime import timedelta
+from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -34,8 +36,27 @@ DOWNLOAD_URL_TTL = timedelta(hours=1)
 # Cloud Tasks adds this header to the /process request; the handler checks it.
 TASK_TOKEN_HEADER = "X-Tasks-Token"
 
+# Local mode (LOCAL_MODE=1): storage is a local directory and analysis runs
+# in-process, so the whole flow works on a laptop with no GCP. The upload/
+# playback URLs point back at this backend (LOCAL_BASE_URL).
+LOCAL_MODE = os.environ.get("LOCAL_MODE") == "1"
+LOCAL_BASE_URL = os.environ.get("LOCAL_BASE_URL", "http://localhost:8000")
+LOCAL_STORAGE_DIR = Path(
+    os.environ.get("LOCAL_STORAGE_DIR", Path(tempfile.gettempdir()) / "putting-gate-local")
+)
+
 _storage_client = None
 _tasks_client = None
+
+
+def is_local() -> bool:
+    """True when running against local disk instead of GCS/Cloud Tasks."""
+    return LOCAL_MODE
+
+
+def storage_ready() -> bool:
+    """True when uploads can be handled — either GCP is configured or local mode."""
+    return is_local() or tasks_enabled()
 
 
 def tasks_enabled() -> bool:
@@ -67,38 +88,82 @@ def object_name_for(session_id: str, filename: Optional[str]) -> str:
     return f"uploads/{session_id}{ext}"
 
 
-# MARK: Cloud Storage
-
-
-def upload_file_to_gcs(local_path: str, object_name: str) -> None:
-    """Upload a local temp file to the bucket. Blocking; call via a threadpool."""
-    _bucket().blob(object_name).upload_from_filename(local_path)
-
-
-def download_gcs_to_temp(object_name: str) -> str:
-    """Download an object to a temp file and return its path. Blocking."""
-    suffix = os.path.splitext(object_name)[1] or ".mp4"
-    fd, tmp_path = tempfile.mkstemp(suffix=suffix)
-    os.close(fd)
-    _bucket().blob(object_name).download_to_filename(tmp_path)
-    return tmp_path
-
-
-def object_exists(object_name: str) -> bool:
-    """True if the object is present in the bucket. Blocking."""
-    return _bucket().blob(object_name).exists()
-
-
-def copy_gcs_object(src: str, dst: str) -> None:
-    """Server-side copy within the bucket (no download). Blocking."""
-    bucket = _bucket()
-    bucket.copy_blob(bucket.blob(src), bucket, dst)
-
-
 def retained_object_name(upload_object_name: str) -> str:
     """Path under the retained `sessions/` prefix (kept 90 days) for a clip that
     was uploaded to the transient `uploads/` prefix (deleted after 1 day)."""
     return "sessions/" + upload_object_name.removeprefix("uploads/")
+
+
+# MARK: Local disk (LOCAL_MODE)
+
+
+def local_path(object_name: str) -> Path:
+    """Filesystem path for an object under the local storage dir. Rejects any
+    path that escapes the storage root or the uploads/ | sessions/ prefixes."""
+    if ".." in object_name or object_name.startswith("/"):
+        raise ValueError("invalid object name")
+    if not (object_name.startswith("uploads/") or object_name.startswith("sessions/")):
+        raise ValueError("invalid object name")
+    return LOCAL_STORAGE_DIR / object_name
+
+
+# MARK: Mode-aware storage API
+
+
+def object_exists(object_name: str) -> bool:
+    """True if the object is present. Blocking."""
+    if is_local():
+        return local_path(object_name).exists()
+    return _bucket().blob(object_name).exists()
+
+
+def download_to_temp(object_name: str) -> str:
+    """Copy/download an object to a temp file and return its path. Blocking."""
+    suffix = os.path.splitext(object_name)[1] or ".mp4"
+    fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)
+    if is_local():
+        shutil.copyfile(local_path(object_name), tmp_path)
+    else:
+        _bucket().blob(object_name).download_to_filename(tmp_path)
+    return tmp_path
+
+
+def copy_object(src: str, dst: str) -> None:
+    """Copy within storage (server-side for GCS). Blocking."""
+    if is_local():
+        dest = local_path(dst)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(local_path(src), dest)
+    else:
+        bucket = _bucket()
+        bucket.copy_blob(bucket.blob(src), bucket, dst)
+
+
+def delete_object(object_name: str) -> None:
+    """Best-effort delete. Blocking."""
+    try:
+        if is_local():
+            local_path(object_name).unlink(missing_ok=True)
+        else:
+            _bucket().blob(object_name).delete()
+    except Exception:  # noqa: BLE001 — cleanup is best-effort
+        logger.warning("Could not delete object %s", object_name, exc_info=True)
+
+
+def upload_url_for(object_name: str) -> str:
+    """URL the client PUTs the video to: a signed GCS URL, or this backend's
+    /local-storage endpoint in local mode."""
+    if is_local():
+        return f"{LOCAL_BASE_URL}/local-storage/{object_name}"
+    return _signed_url(object_name, "PUT", UPLOAD_URL_TTL)
+
+
+def download_url_for(object_name: str) -> str:
+    """URL the frontend streams a retained video from."""
+    if is_local():
+        return f"{LOCAL_BASE_URL}/local-storage/{object_name}"
+    return _signed_url(object_name, "GET", DOWNLOAD_URL_TTL)
 
 
 def _signed_url(object_name: str, method: str, ttl: timedelta) -> str:
@@ -121,25 +186,6 @@ def _signed_url(object_name: str, method: str, ttl: timedelta) -> str:
         service_account_email=signer_email,
         access_token=creds.token,
     )
-
-
-def generate_upload_url(object_name: str) -> str:
-    """Signed URL the client PUTs the video to directly. Content-Type is not
-    signed, so clients may PUT with any/no Content-Type."""
-    return _signed_url(object_name, "PUT", UPLOAD_URL_TTL)
-
-
-def generate_download_url(object_name: str) -> str:
-    """Signed URL the frontend uses to stream a retained session video."""
-    return _signed_url(object_name, "GET", DOWNLOAD_URL_TTL)
-
-
-def delete_gcs_object(object_name: str) -> None:
-    """Best-effort delete of the transient upload. Blocking."""
-    try:
-        _bucket().blob(object_name).delete()
-    except Exception:  # noqa: BLE001 — cleanup is best-effort (lifecycle rule backs it up)
-        logger.warning("Could not delete GCS object %s", object_name, exc_info=True)
 
 
 # MARK: Cloud Tasks

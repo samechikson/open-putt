@@ -1,12 +1,13 @@
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Header, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 import logging
 import tempfile
 import os
 import uuid
 import hmac
+import asyncio
 from typing import Optional
 from .analyzer import CalibrationError, analyze_putt, analyze_session, detect_ball_in_frame
 from .db import (
@@ -120,23 +121,24 @@ def _no_putts_message(result: dict) -> str:
 
 @app.post("/uploads", status_code=201)
 async def create_upload(request: Request):
-    """Mint a short-lived signed URL for the client to PUT its video straight to
-    Cloud Storage, bypassing Cloud Run's 32 MiB request-body limit.
+    """Give the client a URL to PUT its video to directly — a signed Cloud
+    Storage URL, or this backend's /local-storage endpoint in local mode. Either
+    way the video bypasses the request body of the analysis call.
 
     Body: `{filename?, recording_id?}`. Returns `{session_id, object_name,
     upload_url}`. The client PUTs the bytes to `upload_url`, then calls
     `/analyze-session` with `session_id` + `object_name`.
     """
-    if not cloud.tasks_enabled():
+    if not cloud.storage_ready():
         raise HTTPException(status_code=503, detail="Analysis backend is not configured.")
 
     body = await request.json()
     session_id = body.get("recording_id") or str(uuid.uuid4())
     object_name = cloud.object_name_for(session_id, body.get("filename"))
     try:
-        upload_url = await run_in_threadpool(cloud.generate_upload_url, object_name)
+        upload_url = await run_in_threadpool(cloud.upload_url_for, object_name)
     except Exception:  # noqa: BLE001
-        logger.exception("Failed to sign upload URL for %s", object_name)
+        logger.exception("Failed to make upload URL for %s", object_name)
         raise HTTPException(status_code=503, detail="Could not start upload. Try again.")
 
     return JSONResponse(
@@ -147,15 +149,15 @@ async def create_upload(request: Request):
 
 @app.post("/analyze-session", status_code=202)
 async def analyze_session_endpoint(request: Request):
-    """Queue analysis of a video already uploaded to Cloud Storage.
+    """Queue analysis of a video already uploaded to storage.
 
     Body: `{session_id, object_name, gate_width_px?, gate_width_mm?, fps?}` plus
     optional metadata (`user_id, file_name, captured_at, duration, length_feet,
-    break_type`). Creates the session row as 'queued' and enqueues a Cloud Task
-    that analyzes the clip in a separate `/process` request. Clients watch the row
-    via Supabase Realtime for 'done'/'error'. Returns immediately with 202.
+    break_type`). Creates the session row as 'queued' and starts the analysis in
+    the background (a Cloud Task, or in-process in local mode). Clients watch the
+    row via Supabase Realtime for 'done'/'error'. Returns immediately with 202.
     """
-    if not cloud.tasks_enabled():
+    if not cloud.storage_ready():
         raise HTTPException(status_code=503, detail="Analysis backend is not configured.")
 
     body = await request.json()
@@ -177,34 +179,42 @@ async def analyze_session_endpoint(request: Request):
         "length_feet": body.get("length_feet"),
         "break_type": body.get("break_type"),
     }
+    gate_width_px = int(body.get("gate_width_px") or 0)
+    gate_width_mm = float(body.get("gate_width_mm") or 0.0)
+    fps = float(body.get("fps") or 0.0)
 
     # Create the row before returning so the client can immediately subscribe.
     try:
         await run_in_threadpool(create_pending_session, session_id, metadata)
     except Exception:  # noqa: BLE001
-        await run_in_threadpool(cloud.delete_gcs_object, object_name)
+        await run_in_threadpool(cloud.delete_object, object_name)
         logger.exception("Failed to create pending session %s", session_id)
         raise HTTPException(status_code=503, detail="Could not queue analysis. Try again.")
 
-    # Enqueue the background analysis. If this fails, mark the row so the client
-    # doesn't wait forever.
-    try:
-        await run_in_threadpool(
-            cloud.enqueue_process_task,
-            {
-                "session_id": session_id,
-                "object_name": object_name,
-                "gate_width_px": int(body.get("gate_width_px") or 0),
-                "gate_width_mm": float(body.get("gate_width_mm") or 0.0),
-                "fps": float(body.get("fps") or 0.0),
-                "metadata": metadata,
-            },
+    # Start the background analysis. Local mode runs it in-process (the dev server
+    # stays alive); prod hands it to Cloud Tasks so a fresh request owns the CPU.
+    if cloud.is_local():
+        asyncio.create_task(
+            _run_local_job(session_id, object_name, metadata, gate_width_px, gate_width_mm, fps)
         )
-    except Exception:  # noqa: BLE001
-        await run_in_threadpool(set_session_status, session_id, "error", "Could not start analysis.")
-        await run_in_threadpool(cloud.delete_gcs_object, object_name)
-        logger.exception("Failed to enqueue task for session %s", session_id)
-        raise HTTPException(status_code=503, detail="Could not queue analysis. Try again.")
+    else:
+        try:
+            await run_in_threadpool(
+                cloud.enqueue_process_task,
+                {
+                    "session_id": session_id,
+                    "object_name": object_name,
+                    "gate_width_px": gate_width_px,
+                    "gate_width_mm": gate_width_mm,
+                    "fps": fps,
+                    "metadata": metadata,
+                },
+            )
+        except Exception:  # noqa: BLE001
+            await run_in_threadpool(set_session_status, session_id, "error", "Could not start analysis.")
+            await run_in_threadpool(cloud.delete_object, object_name)
+            logger.exception("Failed to enqueue task for session %s", session_id)
+            raise HTTPException(status_code=503, detail="Could not queue analysis. Try again.")
 
     return JSONResponse(
         {"session_id": session_id, "status": "queued"}, status_code=202
@@ -214,7 +224,76 @@ async def analyze_session_endpoint(request: Request):
 async def _record_error(session_id: str, object_name: str, message: str) -> None:
     """Terminal failure: record the message on the row and drop the upload."""
     await run_in_threadpool(set_session_status, session_id, "error", message)
-    await run_in_threadpool(cloud.delete_gcs_object, object_name)
+    await run_in_threadpool(cloud.delete_object, object_name)
+
+
+async def _process_session(
+    session_id: str,
+    object_name: str,
+    metadata: dict,
+    gate_width_px: int,
+    gate_width_mm: float,
+    fps: float,
+) -> None:
+    """Analyze one queued session and drive its row to done/error.
+
+    Domain failures (calibration / no putts / bad video) are recorded on the row
+    and return normally. Unexpected/infra errors propagate so the caller can
+    decide whether to retry.
+    """
+    tmp_path: Optional[str] = None
+    try:
+        await run_in_threadpool(set_session_status, session_id, "processing")
+        tmp_path = await run_in_threadpool(cloud.download_to_temp, object_name)
+
+        try:
+            result = await run_in_threadpool(
+                analyze_session,
+                video_path=tmp_path,
+                gate_width_px=gate_width_px or None,
+                gate_width_mm=gate_width_mm or None,
+                fps=fps or None,
+            )
+        except CalibrationError as exc:
+            await _record_error(session_id, object_name, str(exc))
+            return
+
+        if "error" in result:
+            await _record_error(session_id, object_name, result["error"])
+            return
+        if not result.get("putts"):
+            await _record_error(session_id, object_name, _no_putts_message(result))
+            return
+
+        # Retain the video for playback: copy it to the 90-day `sessions/` prefix
+        # and record the path, then drop the transient `uploads/` copy.
+        retained = cloud.retained_object_name(object_name)
+        await run_in_threadpool(cloud.copy_object, object_name, retained)
+        await run_in_threadpool(
+            persist_session, session_id, {**metadata, "video_path": retained}, result
+        )
+        await run_in_threadpool(cloud.delete_object, object_name)
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+async def _run_local_job(
+    session_id: str, object_name: str, metadata: dict,
+    gate_width_px: int, gate_width_mm: float, fps: float,
+) -> None:
+    """In-process worker for local mode; records an error on unexpected failure."""
+    try:
+        await _process_session(session_id, object_name, metadata, gate_width_px, gate_width_mm, fps)
+    except Exception:  # noqa: BLE001
+        logger.exception("Local job %s failed", session_id)
+        try:
+            await _record_error(session_id, object_name, "Analysis failed unexpectedly.")
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not mark session %s as failed", session_id)
 
 
 @app.post("/process")
@@ -236,46 +315,18 @@ async def process_session(
     payload = await request.json()
     session_id = payload["session_id"]
     object_name = payload["object_name"]
-    metadata = payload.get("metadata") or {}
-    gate_width_px = int(payload.get("gate_width_px") or 0)
-    gate_width_mm = float(payload.get("gate_width_mm") or 0.0)
-    fps = float(payload.get("fps") or 0.0)
     retry_count = int(request.headers.get("X-CloudTasks-TaskRetryCount", "0"))
 
-    tmp_path: Optional[str] = None
     try:
-        await run_in_threadpool(set_session_status, session_id, "processing")
-        tmp_path = await run_in_threadpool(cloud.download_gcs_to_temp, object_name)
-
-        try:
-            result = await run_in_threadpool(
-                analyze_session,
-                video_path=tmp_path,
-                gate_width_px=gate_width_px or None,
-                gate_width_mm=gate_width_mm or None,
-                fps=fps or None,
-            )
-        except CalibrationError as exc:
-            # `exc` is already a plain-language, actionable message.
-            await _record_error(session_id, object_name, str(exc))
-            return JSONResponse({"status": "error"})
-
-        if "error" in result:
-            await _record_error(session_id, object_name, result["error"])
-            return JSONResponse({"status": "error"})
-        if not result.get("putts"):
-            await _record_error(session_id, object_name, _no_putts_message(result))
-            return JSONResponse({"status": "error"})
-
-        # Retain the video for playback: copy it to the 90-day `sessions/` prefix
-        # and record the path, then drop the transient `uploads/` copy.
-        retained = cloud.retained_object_name(object_name)
-        await run_in_threadpool(cloud.copy_gcs_object, object_name, retained)
-        metadata = {**metadata, "video_path": retained}
-        await run_in_threadpool(persist_session, session_id, metadata, result)
-        await run_in_threadpool(cloud.delete_gcs_object, object_name)
-        return JSONResponse({"status": "done"})
-
+        await _process_session(
+            session_id,
+            object_name,
+            payload.get("metadata") or {},
+            int(payload.get("gate_width_px") or 0),
+            float(payload.get("gate_width_mm") or 0.0),
+            float(payload.get("fps") or 0.0),
+        )
+        return JSONResponse({"status": "processed"})
     except Exception:  # noqa: BLE001 — unexpected/infra error
         max_retries = int(os.environ.get("TASKS_MAX_RETRIES", "3"))
         logger.exception(
@@ -288,14 +339,39 @@ async def process_session(
             except Exception:  # noqa: BLE001
                 logger.exception("Cleanup after failure of %s failed", session_id)
             return JSONResponse({"status": "error"})
-        # Let Cloud Tasks retry with backoff; keep the GCS object for the retry.
+        # Let Cloud Tasks retry with backoff; keep the object for the retry.
         raise HTTPException(status_code=500, detail="Processing failed; will retry")
-    finally:
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+
+
+# MARK: Local storage (LOCAL_MODE only) — stands in for Cloud Storage on a laptop.
+
+
+@app.put("/local-storage/{object_path:path}")
+async def local_storage_put(object_path: str, request: Request):
+    if not cloud.is_local():
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        dest = cloud.local_path(object_path)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest, "wb") as f:
+        async for chunk in request.stream():
+            f.write(chunk)
+    return JSONResponse({"status": "ok"})
+
+
+@app.get("/local-storage/{object_path:path}")
+async def local_storage_get(object_path: str):
+    if not cloud.is_local():
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        path = cloud.local_path(object_path)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(path)
 
 
 @app.post("/detect-ball")
@@ -319,12 +395,12 @@ async def session_video_url(session_id: str):
     The session id is an unguessable UUID and the URL expires quickly; there's
     no ownership check (the row itself is RLS-protected in Supabase).
     """
-    if not cloud.tasks_enabled():
+    if not cloud.storage_ready():
         raise HTTPException(status_code=503, detail="Video storage is not configured.")
     video_path = await run_in_threadpool(get_session_video_path, session_id)
     if not video_path:
         raise HTTPException(status_code=404, detail="No video for this session.")
-    url = await run_in_threadpool(cloud.generate_download_url, video_path)
+    url = await run_in_threadpool(cloud.download_url_for, video_path)
     return JSONResponse({"url": url})
 
 
@@ -337,6 +413,6 @@ async def delete_session_endpoint(session_id: str):
     """
     video_path = await run_in_threadpool(get_session_video_path, session_id)
     if video_path:
-        await run_in_threadpool(cloud.delete_gcs_object, video_path)
+        await run_in_threadpool(cloud.delete_object, video_path)
     await run_in_threadpool(delete_session, session_id)
     return JSONResponse({"status": "deleted"})
