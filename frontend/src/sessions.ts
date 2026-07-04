@@ -23,40 +23,68 @@ export interface SessionRow {
 const SESSION_COLUMNS =
   "id,created_at,captured_at,file_name,length_feet,break_type,putt_count,duration_s,segments_detected,status,error";
 
-// Queue a Full Session video for background analysis. Returns the session id
-// immediately (HTTP 202); watch the row via subscribeToSession for completion.
+async function detailFromResponse(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = await res.json();
+    if (body?.detail) return body.detail as string;
+  } catch {
+    // non-JSON body; use the fallback
+  }
+  return fallback;
+}
+
+// Queue a Full Session video for background analysis. Uploads the video straight
+// to Cloud Storage via a signed URL (avoiding Cloud Run's request-size limit),
+// then starts analysis. Returns the session id; watch the row via
+// subscribeToSession for completion.
 export async function uploadSession(
   file: File,
   fps: number | null,
 ): Promise<string> {
-  const fd = new FormData();
-  fd.append("video", file);
-  if (fps) fd.append("fps", String(fps));
-
   const {
     data: { session },
   } = await supabase.auth.getSession();
-  if (session?.user.id) fd.append("user_id", session.user.id);
-  const headers: HeadersInit = session
+  const authHeaders: HeadersInit = session
     ? { Authorization: `Bearer ${session.access_token}` }
     : {};
 
-  const res = await fetch(`${API_BASE}/analyze-session`, {
+  // 1. Ask the backend for a signed upload URL.
+  const initRes = await fetch(`${API_BASE}/uploads`, {
     method: "POST",
-    headers,
-    body: fd,
+    headers: { "Content-Type": "application/json", ...authHeaders },
+    body: JSON.stringify({ filename: file.name }),
   });
-  if (!res.ok) {
-    let detail = `Upload failed (HTTP ${res.status})`;
-    try {
-      const body = await res.json();
-      if (body?.detail) detail = body.detail;
-    } catch {
-      // non-JSON error body; keep the status-code message
-    }
-    throw new Error(detail);
+  if (!initRes.ok) {
+    throw new Error(await detailFromResponse(initRes, "Could not start upload"));
   }
-  const body = (await res.json()) as { session_id: string };
+  const { session_id, object_name, upload_url } = (await initRes.json()) as {
+    session_id: string;
+    object_name: string;
+    upload_url: string;
+  };
+
+  // 2. Upload the video directly to Cloud Storage.
+  const putRes = await fetch(upload_url, { method: "PUT", body: file });
+  if (!putRes.ok) {
+    throw new Error(`Video upload failed (HTTP ${putRes.status})`);
+  }
+
+  // 3. Start background analysis of the uploaded object.
+  const startRes = await fetch(`${API_BASE}/analyze-session`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders },
+    body: JSON.stringify({
+      session_id,
+      object_name,
+      fps: fps ?? 0,
+      file_name: file.name,
+      user_id: session?.user.id ?? null,
+    }),
+  });
+  if (!startRes.ok) {
+    throw new Error(await detailFromResponse(startRes, "Could not start analysis"));
+  }
+  const body = (await startRes.json()) as { session_id: string };
   return body.session_id;
 }
 

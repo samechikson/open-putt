@@ -53,16 +53,18 @@ gcloud tasks queues update "$QUEUE" --location="$REGION" \
 # ---- 5. Secrets -------------------------------------------------------------
 # Seed from backend/.env; generate a random internal token for /process auth.
 set -a; source backend/.env; set +a
-TASKS_INTERNAL_TOKEN="$(openssl rand -hex 32)"
 
-create_secret () {  # name value
+create_secret () {  # name value — replaces the latest version
   printf '%s' "$2" | gcloud secrets create "$1" --data-file=- 2>/dev/null \
     || printf '%s' "$2" | gcloud secrets versions add "$1" --data-file=-
 }
 create_secret SUPABASE_URL         "$SUPABASE_URL"
 create_secret SUPABASE_SECRET_KEY  "$SUPABASE_SECRET_KEY"
 create_secret CORS_ALLOW_ORIGINS   "$CORS_ORIGIN"
-create_secret TASKS_INTERNAL_TOKEN "$TASKS_INTERNAL_TOKEN"
+# The internal token protects /process; generate once and keep it stable across
+# re-runs (rotating it would 403 any in-flight tasks).
+gcloud secrets describe TASKS_INTERNAL_TOKEN >/dev/null 2>&1 \
+  || printf '%s' "$(openssl rand -hex 32)" | gcloud secrets create TASKS_INTERNAL_TOKEN --data-file=-
 
 # ---- 6. Runtime service account + IAM --------------------------------------
 gcloud iam service-accounts create "$SA_NAME" --display-name="Putting Gate Cloud Run" || true
@@ -77,10 +79,20 @@ gcloud storage buckets add-iam-policy-binding "$BUCKET" \
   --member="serviceAccount:${SA_EMAIL}" --role=roles/storage.objectAdmin
 gcloud projects add-iam-policy-binding "$PROJECT" \
   --member="serviceAccount:${SA_EMAIL}" --role=roles/cloudtasks.enqueuer
+# Sign upload URLs via the IAM signBlob API (no private key on Cloud Run):
+# the SA must be able to create tokens for itself.
+gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
+  --member="serviceAccount:${SA_EMAIL}" --role=roles/iam.serviceAccountTokenCreator
 for S in SUPABASE_URL SUPABASE_SECRET_KEY CORS_ALLOW_ORIGINS TASKS_INTERNAL_TOKEN; do
   gcloud secrets add-iam-policy-binding "$S" \
     --member="serviceAccount:${SA_EMAIL}" --role=roles/secretmanager.secretAccessor
 done
+
+# ---- 6b. Bucket CORS so browsers can PUT directly to GCS --------------------
+cat > /tmp/gcs-cors.json <<JSON
+[{"origin":["${CORS_ORIGIN}","http://localhost:5173"],"method":["PUT","GET"],"responseHeader":["Content-Type"],"maxAgeSeconds":3600}]
+JSON
+gcloud storage buckets update "$BUCKET" --cors-file=/tmp/gcs-cors.json
 
 # ---- 7. First deploy (builds from backend/Dockerfile) ----------------------
 # PROCESS_URL isn't known yet; deploy once, then set it and redeploy.
@@ -90,7 +102,7 @@ gcloud run deploy "$SERVICE" \
   --service-account="$SA_EMAIL" \
   --allow-unauthenticated \
   --cpu=2 --memory=2Gi --timeout=3600 --concurrency=2 --min-instances=0 --max-instances=3 \
-  --set-env-vars="GCP_PROJECT=${PROJECT},GCS_BUCKET=${PROJECT}-uploads,TASKS_QUEUE=${QUEUE},TASKS_LOCATION=${REGION}" \
+  --set-env-vars="GCP_PROJECT=${PROJECT},GCS_BUCKET=${PROJECT}-uploads,TASKS_QUEUE=${QUEUE},TASKS_LOCATION=${REGION},GCS_SIGNER_SA=${SA_EMAIL}" \
   --set-secrets="SUPABASE_URL=SUPABASE_URL:latest,SUPABASE_SECRET_KEY=SUPABASE_SECRET_KEY:latest,CORS_ALLOW_ORIGINS=CORS_ALLOW_ORIGINS:latest,TASKS_INTERNAL_TOKEN=TASKS_INTERNAL_TOKEN:latest"
 
 # ---- 8. Wire PROCESS_URL and redeploy env ----------------------------------
@@ -103,4 +115,5 @@ echo "Deployed: $URL"
 echo "Next:"
 echo "  • Set Vercel env VITE_API_BASE=$URL and redeploy the frontend"
 echo "  • Update ios AppSettings.backendBaseURL to $URL"
-echo "  • Smoke test: curl -X POST $URL/analyze-session -F video=@backend/tests/fixtures/IMG_0012.MOV"
+echo "  • Smoke test: curl -X POST $URL/uploads -H 'Content-Type: application/json' -d '{\"filename\":\"clip.mov\"}'"
+echo "    (should return a signed upload_url; PUT a file to it, then POST /analyze-session)"

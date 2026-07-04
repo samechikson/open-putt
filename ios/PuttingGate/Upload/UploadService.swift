@@ -1,9 +1,10 @@
 import Foundation
 import SwiftData
 
-/// Uploads recorded videos to the backend using a background URLSession so
-/// transfers continue if the app is suspended. Upload state is persisted
-/// in SwiftData and updated as tasks complete.
+/// Uploads recorded videos to the backend. Because Cloud Run caps request
+/// bodies, the video is PUT straight to Cloud Storage via a signed URL (on a
+/// background URLSession so it survives suspension); a small JSON call then
+/// queues analysis. Upload state is persisted in SwiftData.
 @MainActor
 final class UploadService: NSObject, ObservableObject {
 
@@ -19,14 +20,14 @@ final class UploadService: NSObject, ObservableObject {
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
 
-    /// Maps a running URLSessionTask's identifier to the recording it is
-    /// uploading, plus the temporary multipart body file to clean up on completion.
-    private var inFlight: [Int: (recordingID: UUID, bodyFile: URL)] = [:]
-
-    /// Response bodies accumulated per task, so a failed upload can surface the
-    /// server's error message (e.g. "Auto-calibration failed") instead of a bare
-    /// status code. A background session delivers the body incrementally.
-    private var responseBodies: [Int: Data] = [:]
+    /// Context for an in-flight PUT: which recording it belongs to and the GCS
+    /// object it targets. Also encoded into `taskDescription` so it survives an
+    /// app relaunch, when the in-memory map is empty.
+    private struct Context {
+        let recordingID: UUID
+        let objectName: String
+    }
+    private var inFlight: [Int: Context] = [:]
 
     /// Completion handler delivered by the app delegate when the system
     /// relaunches us to finish background events.
@@ -53,45 +54,42 @@ final class UploadService: NSObject, ObservableObject {
         }
     }
 
-    /// Begin (or retry) uploading a single recording. Fetching a valid auth
-    /// token is async, so the work runs in a Task.
+    /// Begin (or retry) uploading a single recording.
     func upload(_ recording: Recording) {
         Task { await performUpload(recording) }
     }
 
     private func performUpload(_ recording: Recording) async {
-        guard let endpoint = settings.uploadURL else {
-            mark(recordingID: recording.id, state: .failed, error: "No backend URL configured")
-            return
-        }
         guard recording.fileExists else {
             mark(recordingID: recording.id, state: .failed, error: "Recording file missing on disk")
             return
         }
-
-        // Attach the signed-in user so the backend can tie the session to them.
-        let accessToken = await auth.validAccessToken()
-        let userID = auth.userID
-
-        let boundary = "Boundary-\(UUID().uuidString)"
-        let bodyFile: URL
-        do {
-            bodyFile = try makeMultipartBody(for: recording, boundary: boundary, userID: userID)
-        } catch {
-            mark(recordingID: recording.id, state: .failed, error: "Failed to build request: \(error.localizedDescription)")
+        guard let uploadsURL = settings.uploadsURL else {
+            mark(recordingID: recording.id, state: .failed, error: "No backend URL configured")
             return
         }
 
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        if let accessToken {
-            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        let accessToken = await auth.validAccessToken()
+
+        // Step 1: ask the backend for a signed upload URL.
+        let signed: (objectName: String, uploadURL: URL)
+        do {
+            signed = try await requestUploadURL(
+                uploadsURL, recordingID: recording.id,
+                fileName: recording.fileName, accessToken: accessToken
+            )
+        } catch {
+            mark(recordingID: recording.id, state: .failed,
+                 error: "Couldn't start upload: \(error.localizedDescription)")
+            return
         }
 
-        let task = session.uploadTask(with: request, fromFile: bodyFile)
-        task.taskDescription = recording.id.uuidString
-        inFlight[task.taskIdentifier] = (recording.id, bodyFile)
+        // Step 2: PUT the video straight to Cloud Storage on the background session.
+        var request = URLRequest(url: signed.uploadURL)
+        request.httpMethod = "PUT"
+        let task = session.uploadTask(with: request, fromFile: recording.fileURL)
+        task.taskDescription = "\(recording.id.uuidString)|\(signed.objectName)"
+        inFlight[task.taskIdentifier] = Context(recordingID: recording.id, objectName: signed.objectName)
 
         recording.uploadState = .uploading
         recording.uploadAttempts += 1
@@ -101,75 +99,112 @@ final class UploadService: NSObject, ObservableObject {
         task.resume()
     }
 
-    // MARK: Multipart encoding
+    // MARK: Backend calls (small JSON, foreground)
 
-    /// Writes a multipart/form-data body (video + metadata) to a temp file.
-    /// Background upload tasks require a file source rather than in-memory data.
-    private func makeMultipartBody(for recording: Recording, boundary: String, userID: String?) throws -> URL {
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("upload-\(recording.id.uuidString).multipart")
-        FileManager.default.createFile(atPath: tmp.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: tmp)
-        defer { try? handle.close() }
+    private func requestUploadURL(
+        _ url: URL, recordingID: UUID, fileName: String, accessToken: String?
+    ) async throws -> (objectName: String, uploadURL: URL) {
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let accessToken { req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization") }
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "filename": fileName,
+            "recording_id": recordingID.uuidString,
+        ])
 
-        func writeField(_ name: String, _ value: String) {
-            var s = "--\(boundary)\r\n"
-            s += "Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n"
-            s += "\(value)\r\n"
-            handle.write(Data(s.utf8))
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw UploadError(message: Self.serverMessage(from: data) ?? "Could not start upload")
         }
-
-        writeField("recording_id", recording.id.uuidString)
-        if let userID { writeField("user_id", userID) }
-        writeField("captured_at", ISO8601DateFormatter().string(from: recording.capturedAt))
-        writeField("duration", String(recording.duration))
-        writeField("length_feet", String(recording.lengthFeet))
-        writeField("break_type", recording.breakTypeRaw)
-
-        // File part.
-        var header = "--\(boundary)\r\n"
-        header += "Content-Disposition: form-data; name=\"video\"; filename=\"\(recording.fileName)\"\r\n"
-        header += "Content-Type: video/quicktime\r\n\r\n"
-        handle.write(Data(header.utf8))
-
-        let fileHandle = try FileHandle(forReadingFrom: recording.fileURL)
-        defer { try? fileHandle.close() }
-        while case let chunk = fileHandle.readData(ofLength: 1 << 20), !chunk.isEmpty {
-            handle.write(chunk)
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let objectName = json["object_name"] as? String,
+              let uploadURLString = json["upload_url"] as? String,
+              let uploadURL = URL(string: uploadURLString)
+        else {
+            throw UploadError(message: "Unexpected response from server")
         }
-
-        handle.write(Data("\r\n--\(boundary)--\r\n".utf8))
-        return tmp
+        return (objectName, uploadURL)
     }
 
-    // MARK: State updates
+    /// Step 3: after the video is in Cloud Storage, queue analysis of it.
+    private func startAnalysis(for ctx: Context) async {
+        guard let recording = fetchRecording(ctx.recordingID) else { return }
+        guard let url = settings.analyzeSessionURL else {
+            mark(recordingID: ctx.recordingID, state: .failed, error: "No backend URL configured")
+            return
+        }
+        let accessToken = await auth.validAccessToken()
+
+        var body: [String: Any] = [
+            "session_id": recording.id.uuidString,
+            "object_name": ctx.objectName,
+            "file_name": recording.fileName,
+            "captured_at": ISO8601DateFormatter().string(from: recording.capturedAt),
+            "duration": recording.duration,
+            "length_feet": recording.lengthFeet,
+            "break_type": recording.breakTypeRaw,
+        ]
+        if let userID = auth.userID { body["user_id"] = userID }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let accessToken { req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization") }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
+                mark(recordingID: ctx.recordingID, state: .uploaded, error: nil)
+            } else {
+                let msg = Self.serverMessage(from: data) ?? "Could not start analysis"
+                mark(recordingID: ctx.recordingID, state: .failed, error: msg)
+            }
+        } catch {
+            mark(recordingID: ctx.recordingID, state: .failed,
+                 error: "Could not start analysis: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: State
+
+    private func fetchRecording(_ id: UUID) -> Recording? {
+        let descriptor = FetchDescriptor<Recording>(predicate: #Predicate { $0.id == id })
+        return try? modelContainer.mainContext.fetch(descriptor).first
+    }
 
     private func mark(recordingID: UUID, state: UploadState, error: String?) {
-        let context = modelContainer.mainContext
-        let descriptor = FetchDescriptor<Recording>(predicate: #Predicate { $0.id == recordingID })
-        guard let recording = try? context.fetch(descriptor).first else { return }
+        guard let recording = fetchRecording(recordingID) else { return }
         recording.uploadState = state
         recording.lastUploadError = error
-        try? context.save()
+        try? modelContainer.mainContext.save()
     }
+
+    /// Extract a human-readable message from a FastAPI error body (`detail` is a
+    /// string for HTTPExceptions, an array of `{msg}` for validation errors).
+    private static func serverMessage(from body: Data?) -> String? {
+        guard let body,
+              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+        else { return nil }
+        if let detail = json["detail"] as? String { return detail }
+        if let items = json["detail"] as? [[String: Any]] {
+            let msgs = items.compactMap { $0["msg"] as? String }
+            if !msgs.isEmpty { return msgs.joined(separator: "; ") }
+        }
+        return nil
+    }
+}
+
+private struct UploadError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
 }
 
 extension UploadService: URLSessionDataDelegate {
 
-    /// Accumulate the response body so a failed upload can show the server's
-    /// message. Delivered before didCompleteWithError; hop to the main actor to
-    /// mutate responseBodies in order with completion.
-    nonisolated func urlSession(
-        _ session: URLSession,
-        dataTask: URLSessionDataTask,
-        didReceive data: Data
-    ) {
-        let taskID = dataTask.taskIdentifier
-        Task { @MainActor in
-            self.responseBodies[taskID, default: Data()].append(data)
-        }
-    }
-
+    /// The background PUT to Cloud Storage finished. On success, kick off the
+    /// analyze-session call; otherwise record the failure.
     nonisolated func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
@@ -178,40 +213,30 @@ extension UploadService: URLSessionDataDelegate {
         let taskID = task.taskIdentifier
         let statusCode = (task.response as? HTTPURLResponse)?.statusCode
         let errorText = error?.localizedDescription
+        let description = task.taskDescription
 
         Task { @MainActor in
-            guard let entry = self.inFlight.removeValue(forKey: taskID) else { return }
-            let body = self.responseBodies.removeValue(forKey: taskID)
-            try? FileManager.default.removeItem(at: entry.bodyFile)
+            // Prefer the in-memory context; fall back to the encoded description
+            // when the app was relaunched to deliver this event.
+            let ctx = self.inFlight.removeValue(forKey: taskID) ?? Self.context(from: description)
+            guard let ctx else { return }
 
             if let errorText {
-                self.mark(recordingID: entry.recordingID, state: .failed, error: errorText)
+                self.mark(recordingID: ctx.recordingID, state: .failed, error: errorText)
             } else if let code = statusCode, !(200..<300).contains(code) {
-                let message = Self.serverMessage(from: body)
-                    ?? "Server returned HTTP \(code)"
-                self.mark(recordingID: entry.recordingID, state: .failed, error: message)
+                self.mark(recordingID: ctx.recordingID, state: .failed,
+                          error: "Video upload failed (HTTP \(code))")
             } else {
-                self.mark(recordingID: entry.recordingID, state: .uploaded, error: nil)
+                await self.startAnalysis(for: ctx)
             }
         }
     }
 
-    /// Extract a human-readable message from a FastAPI error body. `detail` is a
-    /// string for HTTPExceptions and an array of `{msg}` objects for request
-    /// validation errors; handle both, else nil.
-    private static func serverMessage(from body: Data?) -> String? {
-        guard let body,
-              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+    private static func context(from description: String?) -> Context? {
+        guard let parts = description?.split(separator: "|", maxSplits: 1),
+              parts.count == 2, let id = UUID(uuidString: String(parts[0]))
         else { return nil }
-
-        if let detail = json["detail"] as? String {
-            return detail
-        }
-        if let items = json["detail"] as? [[String: Any]] {
-            let msgs = items.compactMap { $0["msg"] as? String }
-            if !msgs.isEmpty { return msgs.joined(separator: "; ") }
-        }
-        return nil
+        return Context(recordingID: id, objectName: String(parts[1]))
     }
 
     nonisolated func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {

@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import tempfile
+from datetime import timedelta
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,10 @@ TASKS_QUEUE = os.environ.get("TASKS_QUEUE")
 TASKS_LOCATION = os.environ.get("TASKS_LOCATION")
 PROCESS_URL = os.environ.get("PROCESS_URL")
 TASKS_INTERNAL_TOKEN = os.environ.get("TASKS_INTERNAL_TOKEN")
+# Service account used to sign upload URLs (must have Token Creator on itself).
+GCS_SIGNER_SA = os.environ.get("GCS_SIGNER_SA")
+# How long a browser/iOS client has to PUT the video to the signed URL.
+UPLOAD_URL_TTL = timedelta(minutes=30)
 
 # Cloud Tasks adds this header to the /process request; the handler checks it.
 TASK_TOKEN_HEADER = "X-Tasks-Token"
@@ -75,6 +80,34 @@ def download_gcs_to_temp(object_name: str) -> str:
     os.close(fd)
     _bucket().blob(object_name).download_to_filename(tmp_path)
     return tmp_path
+
+
+def object_exists(object_name: str) -> bool:
+    """True if the object is present in the bucket. Blocking."""
+    return _bucket().blob(object_name).exists()
+
+
+def generate_upload_url(object_name: str) -> str:
+    """A short-lived V4 signed URL the client PUTs the video to directly.
+
+    On Cloud Run the runtime credentials have no private key, so signing goes
+    through the IAM signBlob API — the signer service account (`GCS_SIGNER_SA`)
+    must hold `roles/iam.serviceAccountTokenCreator` on itself. Content-Type is
+    intentionally not signed, so clients may PUT with any/no Content-Type.
+    """
+    from google.auth import default as google_default
+    from google.auth.transport.requests import Request as AuthRequest
+
+    creds, _ = google_default()
+    creds.refresh(AuthRequest())
+    signer_email = GCS_SIGNER_SA or getattr(creds, "service_account_email", None)
+    return _bucket().blob(object_name).generate_signed_url(
+        version="v4",
+        expiration=UPLOAD_URL_TTL,
+        method="PUT",
+        service_account_email=signer_email,
+        access_token=creds.token,
+    )
 
 
 def delete_gcs_object(object_name: str) -> None:

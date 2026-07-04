@@ -18,10 +18,8 @@ struct SettingsView: View {
                 }
 
                 Section("Backend") {
-                    if let url = settings.uploadURL {
-                        Text("Uploads to: \(url.absoluteString)")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                    Text(AppSettings.backendBaseURL)
+                        .font(.caption).foregroundStyle(.secondary)
                     Button("Retry pending uploads") {
                         coordinator.uploads.uploadPending()
                     }

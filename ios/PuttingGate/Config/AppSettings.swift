@@ -8,13 +8,15 @@ final class AppSettings: ObservableObject {
 
     // MARK: Backend
 
-    /// Base URL of the deployed backend on Fly.io. Hardcoded so the app always
-    /// talks to production; not user-configurable.
-    static let backendBaseURL = "https://putting-gate-backend.fly.dev"
+    /// Base URL of the deployed backend on Cloud Run. Hardcoded so the app
+    /// always talks to production; not user-configurable.
+    static let backendBaseURL = "https://putting-gate-backend-tksj5yumxa-uc.a.run.app"
 
-    /// Path appended to the base URL for video uploads. Points at the
-    /// multi-putt session analyzer, which persists the session and its putts.
-    static let uploadPath = "/analyze-session"
+    /// Endpoint that mints a signed Cloud Storage upload URL.
+    var uploadsURL: URL? { URL(string: Self.backendBaseURL + "/uploads") }
+
+    /// Endpoint that queues analysis of an already-uploaded object.
+    var analyzeSessionURL: URL? { URL(string: Self.backendBaseURL + "/analyze-session") }
 
     // MARK: Capture
 
@@ -24,11 +26,6 @@ final class AppSettings: ObservableObject {
     var capturePreset: CapturePreset {
         get { CapturePreset(rawValue: capturePresetRaw) ?? .hd1080 }
         set { capturePresetRaw = newValue.rawValue }
-    }
-
-    /// Resolved upload endpoint on the deployed backend.
-    var uploadURL: URL? {
-        URL(string: Self.backendBaseURL + Self.uploadPath)
     }
 }
 

@@ -112,54 +112,65 @@ def _no_putts_message(result: dict) -> str:
     )
 
 
-@app.post("/analyze-session", status_code=202)
-async def analyze_session_endpoint(
-    video: UploadFile = File(...),
-    gate_width_px: int = Form(default=0),
-    gate_width_mm: float = Form(default=0.0),
-    fps: float = Form(default=0.0),
-    # Optional iOS Recording metadata; used to tag/identify the session.
-    recording_id: Optional[str] = Form(default=None),
-    captured_at: Optional[str] = Form(default=None),
-    duration: Optional[float] = Form(default=None),
-    length_feet: Optional[int] = Form(default=None),
-    break_type: Optional[str] = Form(default=None),
-    user_id: Optional[str] = Form(default=None),
-):
-    """Queue analysis of a multi-putt video and return immediately.
+@app.post("/uploads", status_code=201)
+async def create_upload(request: Request):
+    """Mint a short-lived signed URL for the client to PUT its video straight to
+    Cloud Storage, bypassing Cloud Run's 32 MiB request-body limit.
 
-    Analysis is decode-bound and can run for minutes, so we don't hold the
-    request open: the clip is stored in Cloud Storage, the session row is created
-    as 'queued', and a Cloud Task is enqueued to run the analysis in a separate
-    `/process` request. Clients watch the row (via Supabase Realtime) for the
-    transition to 'done' (results + putts persisted) or 'error' (message on the
-    row). Calibration is automatic; pass both gate_width fields to override scale.
+    Body: `{filename?, recording_id?}`. Returns `{session_id, object_name,
+    upload_url}`. The client PUTs the bytes to `upload_url`, then calls
+    `/analyze-session` with `session_id` + `object_name`.
     """
-    if not video.content_type.startswith("video/"):
-        raise HTTPException(status_code=400, detail="File must be a video")
     if not cloud.tasks_enabled():
         raise HTTPException(status_code=503, detail="Analysis backend is not configured.")
 
-    session_id = recording_id or str(uuid.uuid4())
-    object_name = cloud.object_name_for(session_id, video.filename)
-    metadata = {
-        "user_id": user_id,
-        "file_name": video.filename,
-        "captured_at": captured_at,
-        "ios_duration_s": duration,
-        "length_feet": length_feet,
-        "break_type": break_type,
-    }
-
-    # Stream the upload to a temp file (bounded memory), then hand it to GCS.
-    tmp_path = await _save_upload_to_temp(video)
+    body = await request.json()
+    session_id = body.get("recording_id") or str(uuid.uuid4())
+    object_name = cloud.object_name_for(session_id, body.get("filename"))
     try:
-        await run_in_threadpool(cloud.upload_file_to_gcs, tmp_path, object_name)
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        upload_url = await run_in_threadpool(cloud.generate_upload_url, object_name)
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to sign upload URL for %s", object_name)
+        raise HTTPException(status_code=503, detail="Could not start upload. Try again.")
+
+    return JSONResponse(
+        {"session_id": session_id, "object_name": object_name, "upload_url": upload_url},
+        status_code=201,
+    )
+
+
+@app.post("/analyze-session", status_code=202)
+async def analyze_session_endpoint(request: Request):
+    """Queue analysis of a video already uploaded to Cloud Storage.
+
+    Body: `{session_id, object_name, gate_width_px?, gate_width_mm?, fps?}` plus
+    optional metadata (`user_id, file_name, captured_at, duration, length_feet,
+    break_type`). Creates the session row as 'queued' and enqueues a Cloud Task
+    that analyzes the clip in a separate `/process` request. Clients watch the row
+    via Supabase Realtime for 'done'/'error'. Returns immediately with 202.
+    """
+    if not cloud.tasks_enabled():
+        raise HTTPException(status_code=503, detail="Analysis backend is not configured.")
+
+    body = await request.json()
+    session_id = body.get("session_id")
+    object_name = body.get("object_name")
+    if not session_id or not object_name:
+        raise HTTPException(status_code=400, detail="session_id and object_name are required")
+    # Only our own upload namespace is addressable.
+    if not object_name.startswith("uploads/"):
+        raise HTTPException(status_code=400, detail="Invalid object_name")
+    if not await run_in_threadpool(cloud.object_exists, object_name):
+        raise HTTPException(status_code=400, detail="Uploaded file not found. Upload it first.")
+
+    metadata = {
+        "user_id": body.get("user_id"),
+        "file_name": body.get("file_name"),
+        "captured_at": body.get("captured_at"),
+        "ios_duration_s": body.get("duration"),
+        "length_feet": body.get("length_feet"),
+        "break_type": body.get("break_type"),
+    }
 
     # Create the row before returning so the client can immediately subscribe.
     try:
@@ -177,9 +188,9 @@ async def analyze_session_endpoint(
             {
                 "session_id": session_id,
                 "object_name": object_name,
-                "gate_width_px": gate_width_px,
-                "gate_width_mm": gate_width_mm,
-                "fps": fps,
+                "gate_width_px": int(body.get("gate_width_px") or 0),
+                "gate_width_mm": float(body.get("gate_width_mm") or 0.0),
+                "fps": float(body.get("fps") or 0.0),
                 "metadata": metadata,
             },
         )
