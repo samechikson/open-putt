@@ -169,3 +169,19 @@ export async function fetchPutts(sessionId: string): Promise<PuttRow[]> {
   if (error) throw new Error(error.message);
   return (data ?? []) as PuttRow[];
 }
+
+// Pull every putt's offset_mm across several sessions in one query, for the
+// home-page analytics summary. Nulls (putts with no measured offset) are dropped.
+export async function fetchOffsetsForSessions(
+  sessionIds: string[],
+): Promise<number[]> {
+  if (sessionIds.length === 0) return [];
+  const { data, error } = await supabase
+    .from("putts")
+    .select("offset_mm")
+    .in("session_id", sessionIds);
+  if (error) throw new Error(error.message);
+  return (data ?? [])
+    .map((r) => (r as { offset_mm: number | null }).offset_mm)
+    .filter((o): o is number => o != null);
+}

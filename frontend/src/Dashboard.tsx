@@ -1,9 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   fetchSessions,
+  fetchOffsetsForSessions,
   type SessionRow,
   type SessionStatus,
 } from "./sessions";
+import { biasWord, golferSide } from "./analysis";
+import { mean } from "./stats";
+
+// How many recent completed sessions the home-page summary considers.
+type SessionWindow = number | "all";
+const WINDOW_OPTIONS: SessionWindow[] = [5, 10, 20, "all"];
 
 interface DashboardProps {
   onNewSession: () => void;
@@ -49,6 +56,9 @@ export default function Dashboard({
     undefined,
   );
   const [error, setError] = useState<string | null>(null);
+  const [sessionWindow, setSessionWindow] = useState<SessionWindow>(5);
+  // null = loading, array = loaded offsets across the selected sessions.
+  const [offsets, setOffsets] = useState<number[] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -66,8 +76,88 @@ export default function Dashboard({
     };
   }, []);
 
+  // The most recent completed sessions in the selected window (rows arrive
+  // newest-first from fetchSessions).
+  const windowSessionIds = useMemo(() => {
+    if (!sessions) return [];
+    const done = sessions.filter((s) => s.status === "done");
+    return (sessionWindow === "all" ? done : done.slice(0, sessionWindow)).map(
+      (s) => s.id,
+    );
+  }, [sessions, sessionWindow]);
+
+  const idsKey = windowSessionIds.join(",");
+  useEffect(() => {
+    let cancelled = false;
+    setOffsets(null);
+    fetchOffsetsForSessions(windowSessionIds)
+      .then((rows) => {
+        if (!cancelled) setOffsets(rows);
+      })
+      .catch(() => {
+        // Summary is secondary; leave it loading rather than breaking the list.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [idsKey]);
+
+  const bias = offsets ? mean(offsets) : null;
+  const biasSide = bias == null ? "center" : golferSide(bias);
+  const totalPutts = offsets?.length ?? 0;
+  const hasDoneSessions = windowSessionIds.length > 0;
+
   return (
     <>
+      {hasDoneSessions && (
+        <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5 mb-6">
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <h3 className="text-xs font-semibold uppercase tracking-widest text-[#aaa]">
+              Recent Form
+            </h3>
+            <select
+              value={sessionWindow === "all" ? "all" : String(sessionWindow)}
+              onChange={(e) =>
+                setSessionWindow(
+                  e.target.value === "all" ? "all" : Number(e.target.value),
+                )
+              }
+              className="bg-[#222] border border-[#333] hover:border-[#444] rounded-lg text-sm text-white px-3 py-1.5 cursor-pointer focus:outline-none focus:border-[#22c55e]"
+            >
+              {WINDOW_OPTIONS.map((opt) => (
+                <option key={opt} value={opt === "all" ? "all" : opt}>
+                  {opt === "all" ? "All sessions" : `Last ${opt} sessions`}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <div className="offset-value">
+                {offsets == null
+                  ? "…"
+                  : bias == null
+                    ? "—"
+                    : `${Math.abs(bias).toFixed(1)} mm`}
+              </div>
+              <p className="text-sm text-[#aaa] -mt-1">
+                {bias == null
+                  ? "directional bias"
+                  : biasSide === "center"
+                    ? "no directional bias"
+                    : `${biasWord(biasSide)} bias`}
+              </p>
+            </div>
+            <div>
+              <div className="offset-value">
+                {offsets == null ? "…" : totalPutts}
+              </div>
+              <p className="text-sm text-[#aaa] -mt-1">total putts</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between gap-4 mb-6">
         <h2 className="text-xl font-bold text-white">Your Sessions</h2>
         <button
