@@ -8,6 +8,7 @@ import {
 } from "./sessions";
 import { biasWord, golferSide } from "./analysis";
 import { mean } from "./stats";
+import ContributionGraph from "./ContributionGraph";
 
 // How many recent completed sessions the home-page summary considers.
 type SessionWindow = number | "all";
@@ -110,52 +111,61 @@ export default function Dashboard({
 
   return (
     <>
-      {hasDoneSessions && (
-        <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5 mb-6">
-          <div className="flex items-center justify-between gap-4 mb-3">
-            <h3 className="text-xs font-semibold uppercase tracking-widest text-[#aaa]">
-              Recent Form
-            </h3>
-            <select
-              value={sessionWindow === "all" ? "all" : String(sessionWindow)}
-              onChange={(e) =>
-                setSessionWindow(
-                  e.target.value === "all" ? "all" : Number(e.target.value),
-                )
-              }
-              className="bg-[#222] border border-[#333] hover:border-[#444] rounded-lg text-sm text-white px-3 py-1.5 cursor-pointer focus:outline-none focus:border-[#22c55e]"
-            >
-              {WINDOW_OPTIONS.map((opt) => (
-                <option key={opt} value={opt === "all" ? "all" : opt}>
-                  {opt === "all" ? "All sessions" : `Last ${opt} sessions`}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <div className="offset-value">
-                {offsets == null
-                  ? "…"
-                  : bias == null
-                    ? "—"
-                    : `${Math.abs(bias).toFixed(1)} mm`}
+      {sessions && sessions.length > 0 && (
+        <div className="flex flex-col lg:flex-row gap-6 mb-6">
+          <ContributionGraph
+            sessions={sessions}
+            className="lg:w-1/3 lg:shrink-0 min-w-0"
+          />
+
+          {hasDoneSessions && (
+            <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5 lg:flex-1 min-w-0">
+              <div className="flex items-center justify-between gap-4 mb-3">
+                <h3 className="text-xs font-semibold uppercase tracking-widest text-[#aaa]">
+                  Recent Form
+                </h3>
+                <select
+                  value={sessionWindow === "all" ? "all" : String(sessionWindow)}
+                  onChange={(e) =>
+                    setSessionWindow(
+                      e.target.value === "all" ? "all" : Number(e.target.value),
+                    )
+                  }
+                  className="bg-[#222] border border-[#333] hover:border-[#444] rounded-lg text-sm text-white px-3 py-1.5 cursor-pointer focus:outline-none focus:border-[#22c55e]"
+                >
+                  {WINDOW_OPTIONS.map((opt) => (
+                    <option key={opt} value={opt === "all" ? "all" : opt}>
+                      {opt === "all" ? "All sessions" : `Last ${opt} sessions`}
+                    </option>
+                  ))}
+                </select>
               </div>
-              <p className="text-sm text-[#aaa] -mt-1">
-                {bias == null
-                  ? "directional bias"
-                  : biasSide === "center"
-                    ? "no directional bias"
-                    : `${biasWord(biasSide)} bias`}
-              </p>
-            </div>
-            <div>
-              <div className="offset-value">
-                {offsets == null ? "…" : totalPutts}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <div className="offset-value">
+                    {offsets == null
+                      ? "…"
+                      : bias == null
+                        ? "—"
+                        : `${Math.abs(bias).toFixed(1)} mm`}
+                  </div>
+                  <p className="text-sm text-[#aaa] -mt-1">
+                    {bias == null
+                      ? "directional bias"
+                      : biasSide === "center"
+                        ? "no directional bias"
+                        : `${biasWord(biasSide)} bias`}
+                  </p>
+                </div>
+                <div>
+                  <div className="offset-value">
+                    {offsets == null ? "…" : totalPutts}
+                  </div>
+                  <p className="text-sm text-[#aaa] -mt-1">total putts</p>
+                </div>
               </div>
-              <p className="text-sm text-[#aaa] -mt-1">total putts</p>
             </div>
-          </div>
+          )}
         </div>
       )}
 
@@ -199,7 +209,7 @@ export default function Dashboard({
       )}
 
       {sessions && sessions.length > 0 && (
-        <div className="flex flex-col gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {sessions.map((s) => (
             <button
               key={s.id}
