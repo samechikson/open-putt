@@ -26,6 +26,7 @@ struct RecordView: View {
                     captureTestCard
                 }
                 if !recorder.isRecording {
+                    exposureControl
                     captureTestButton
                 }
                 recordButton
@@ -37,6 +38,35 @@ struct RecordView: View {
             }
         }
         .sheet(isPresented: $showLengthPicker) { lengthPickerSheet }
+    }
+
+    // MARK: Exposure
+
+    private var exposureControl: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "sun.max.fill").foregroundStyle(.secondary)
+            Slider(
+                value: exposureBinding,
+                in: AppSettings.exposureBiasRange,
+                step: AppSettings.exposureBiasStep
+            )
+            Text(String(format: "%+.1f EV", settings.exposureBias))
+                .font(.subheadline.weight(.semibold).monospacedDigit())
+                .frame(width: 60, alignment: .trailing)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial, in: Capsule())
+    }
+
+    private var exposureBinding: Binding<Double> {
+        Binding(
+            get: { settings.exposureBias },
+            set: { newValue in
+                settings.exposureBias = newValue
+                recorder.setExposureBias(newValue)
+            }
+        )
     }
 
     // MARK: Capture test

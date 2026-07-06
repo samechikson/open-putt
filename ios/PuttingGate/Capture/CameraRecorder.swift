@@ -34,6 +34,8 @@ final class CameraRecorder: NSObject, ObservableObject {
     private let ciContext = CIContext()
 
     private var configured = false
+    /// The active capture device, kept so exposure can be re-tuned live.
+    private var videoDevice: AVCaptureDevice?
     /// When the in-flight recording began, so we can timestamp the file.
     private var recordingStartedAt: Date?
     /// Putt metadata captured at the moment recording started.
@@ -93,6 +95,7 @@ final class CameraRecorder: NSObject, ObservableObject {
            let input = try? AVCaptureDeviceInput(device: device),
            captureSession.canAddInput(input) {
             captureSession.addInput(input)
+            videoDevice = device
             // Prefer high-frame-rate capture for crisper ball tracking. Selecting
             // an activeFormat overrides the session preset and resets exposure, so
             // it must run before configureExposure.
@@ -177,26 +180,41 @@ final class CameraRecorder: NSObject, ObservableObject {
             ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
     }
 
-    /// Underexpose slightly. Bright outdoor scenes otherwise overexpose the
-    /// white ball and green, washing out the detail the backend needs; a
-    /// lower exposure keeps highlights intact. Auto-exposure still tracks the
-    /// scene — it just aims a couple of stops darker.
-    private static let exposureBiasEV: Float = -2.0
-
+    /// Bias auto-exposure by the user's setting. Bright outdoor scenes overexpose
+    /// the white ball and green (washing out detail the backend needs), so the
+    /// default aims darker; dim indoor scenes need it raised. Auto-exposure still
+    /// tracks the scene — this just offsets its target.
     private func configureExposure(_ device: AVCaptureDevice) {
         do {
             try device.lockForConfiguration()
             if device.isExposureModeSupported(.continuousAutoExposure) {
                 device.exposureMode = .continuousAutoExposure
             }
-            // Clamp into the device's supported range.
-            let bias = max(device.minExposureTargetBias,
-                           min(device.maxExposureTargetBias, Self.exposureBiasEV))
-            device.setExposureTargetBias(bias)
+            device.setExposureTargetBias(clampedBias(Float(settings.exposureBias), device))
             device.unlockForConfiguration()
         } catch {
             // Non-fatal: fall back to the default auto-exposure.
         }
+    }
+
+    /// Re-apply the exposure bias while the session is live, e.g. as the user
+    /// drags the exposure slider.
+    func setExposureBias(_ ev: Double) {
+        sessionQueue.async { [weak self] in
+            guard let self, let device = self.videoDevice else { return }
+            do {
+                try device.lockForConfiguration()
+                device.setExposureTargetBias(self.clampedBias(Float(ev), device))
+                device.unlockForConfiguration()
+            } catch {
+                // Non-fatal: keep the previous bias.
+            }
+        }
+    }
+
+    /// Clamp a requested EV bias into the device's supported range.
+    private func clampedBias(_ ev: Float, _ device: AVCaptureDevice) -> Float {
+        max(device.minExposureTargetBias, min(device.maxExposureTargetBias, ev))
     }
 
     // MARK: Recording control

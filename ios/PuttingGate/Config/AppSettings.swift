@@ -30,6 +30,15 @@ final class AppSettings: ObservableObject {
         get { CapturePreset(rawValue: capturePresetRaw) ?? .hd1080 }
         set { capturePresetRaw = newValue.rawValue }
     }
+
+    /// Auto-exposure bias in EV applied while recording. Negative underexposes
+    /// (good for bright outdoor scenes); raise it toward 0/positive for dim
+    /// indoor light. Clamped to the device's supported range when applied.
+    @AppStorage("exposureBias") var exposureBias: Double = -2.0
+
+    /// Selectable exposure steps for the record-screen slider.
+    static let exposureBiasRange: ClosedRange<Double> = -3.0...3.0
+    static let exposureBiasStep: Double = 0.5
 }
 
 /// Subset of AVCaptureSession presets exposed in Settings.
