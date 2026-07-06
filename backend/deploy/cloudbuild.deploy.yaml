@@ -1,0 +1,51 @@
+# CI build + deploy for the backend, run by the GitHub push-to-main Cloud Build
+# trigger (set up via backend/deploy/setup-trigger.sh).
+#
+# Builds the image with layer caching, then deploys it to Cloud Run. This only
+# ships code: env vars, secrets and the service account already set on the
+# service are preserved (infra is provisioned by cloud-run.sh, not here).
+#
+# Note: a GitHub trigger checks out the whole repo, so the build context is the
+# repo root here — hence `-f backend/Dockerfile backend` (the docker daemon then
+# trims that context via backend/.dockerignore). This differs from the local
+# cloudbuild.yaml, which is submitted with backend/ as the context.
+steps:
+  # 1. Cached image build.
+  - name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    env:
+      - DOCKER_BUILDKIT=1
+    args:
+      - -c
+      - |
+        docker pull "${_IMAGE}:latest" || true
+        docker build \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --cache-from "${_IMAGE}:latest" \
+          -t "${_IMAGE}:latest" \
+          -f backend/Dockerfile backend
+  - name: gcr.io/cloud-builders/docker
+    args: ["push", "${_IMAGE}:latest"]
+
+  # 2. Ship it. Unspecified config (env/secrets/SA) is kept from the live revision.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - "${_SERVICE}"
+      - "--image=${_IMAGE}:latest"
+      - "--region=${_REGION}"
+      - "--quiet"
+
+images:
+  - "${_IMAGE}:latest"
+
+options:
+  machineType: E2_HIGHCPU_8
+
+# Fixed defaults so the trigger needs no extra substitutions.
+substitutions:
+  _IMAGE: us-central1-docker.pkg.dev/putting-gate/putting-gate/putting-gate-backend
+  _SERVICE: putting-gate-backend
+  _REGION: us-central1
