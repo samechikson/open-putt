@@ -2,6 +2,8 @@ import SwiftUI
 
 struct RecordView: View {
     @EnvironmentObject private var recorder: CameraRecorder
+    @EnvironmentObject private var settings: AppSettings
+    @StateObject private var captureTest = CaptureTestModel()
 
     @State private var lengthFeet = 9
     @State private var breakType: PuttBreak = .straight
@@ -20,6 +22,12 @@ struct RecordView: View {
                     recordingIndicator
                 }
                 Spacer()
+                if captureTest.state != .idle {
+                    captureTestCard
+                }
+                if !recorder.isRecording {
+                    captureTestButton
+                }
                 recordButton
             }
             .padding()
@@ -29,6 +37,73 @@ struct RecordView: View {
             }
         }
         .sheet(isPresented: $showLengthPicker) { lengthPickerSheet }
+    }
+
+    // MARK: Capture test
+
+    private var captureTestButton: some View {
+        Button {
+            captureTest.run(
+                url: settings.calibrationCheckURL,
+                frame: recorder.captureTestFrame()
+            )
+        } label: {
+            Label("Capture test", systemImage: "checkmark.seal")
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(.ultraThinMaterial, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(recorder.permissionDenied)
+    }
+
+    @ViewBuilder
+    private var captureTestCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            switch captureTest.state {
+            case .idle:
+                EmptyView()
+            case .checking:
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Checking the scene…")
+                }
+            case let .result(verdict):
+                checkRow(label: "Laser gate", found: verdict.gateFound)
+                checkRow(label: "Ball at address", found: verdict.ballFound)
+                Text(verdict.message)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            case let .failed(message):
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(alignment: .topTrailing) {
+            Button {
+                captureTest.dismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func checkRow(label: String, found: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: found ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .foregroundStyle(found ? .green : .red)
+            Text(label).font(.subheadline)
+        }
     }
 
     // MARK: Putt info

@@ -21,6 +21,20 @@ class CalibrationError(Exception):
     """Auto-calibration could not derive the gate and scale from the video."""
 
 
+# Player-facing guidance shared by the post-analysis error and the pre-flight
+# calibration check, so both speak with one voice.
+_MSG_NO_GATE = (
+    "Couldn't find the laser gate. Make sure both gate lasers are switched on "
+    "and clearly visible, and hold the camera steady for a moment before the "
+    "first putt."
+)
+_MSG_NO_BALL = (
+    "Couldn't find the ball at address. Place the ball on the marker and keep "
+    "it still at the start of the recording so the analyzer can measure the "
+    "scale."
+)
+
+
 def _calibration_message(failures: list[str]) -> str:
     """Turn the per-frame calibration failures into one actionable message.
 
@@ -34,17 +48,9 @@ def _calibration_message(failures: list[str]) -> str:
     dominant = max(set(reasons), key=reasons.count) if reasons else ""
 
     if "laser dot" in dominant:
-        return (
-            "Couldn't find the laser gate in the video. Make sure both gate "
-            "lasers are switched on and clearly visible, and hold the camera "
-            "steady for a moment before the first putt."
-        )
+        return _MSG_NO_GATE
     if "resting ball" in dominant:
-        return (
-            "Couldn't find the ball at address. Place the ball on the marker "
-            "and keep it still at the start of the recording so the analyzer "
-            "can measure the scale."
-        )
+        return _MSG_NO_BALL
     if "unreadable" in dominant:
         return (
             "Couldn't read the video frames. Try recording again, or check the "
@@ -398,6 +404,33 @@ def detect_ball_in_frame(
     else:
         result.update({"x": int(best[0]), "y": int(best[1]), "r": int(best[2])})
     return result
+
+
+def check_calibration_frame(image_bytes: bytes) -> dict:
+    """Pre-flight for the iOS "Capture test": on one live frame, report whether
+    the two elements calibration needs — the laser gate and the resting ball —
+    are both visible, with plain-language guidance when one is missing.
+
+    Reuses the same single-frame detector the analyzer uses, so a passing check
+    means the real recording should calibrate.
+    """
+    detection = detect_ball_in_frame(image_bytes)
+    gate_found = detection.get("gate_center_x") is not None
+    ball_found = detection.get("x") is not None
+
+    if not gate_found:
+        message = _MSG_NO_GATE
+    elif not ball_found:
+        message = _MSG_NO_BALL
+    else:
+        message = "Looks good — the gate and ball are both in view. Ready to record."
+
+    return {
+        "gate_found": gate_found,
+        "ball_found": ball_found,
+        "ok": gate_found and ball_found,
+        "message": message,
+    }
 
 
 def _analyze_segment(

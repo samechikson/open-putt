@@ -9,7 +9,13 @@ import uuid
 import hmac
 import asyncio
 from typing import Optional
-from .analyzer import CalibrationError, analyze_putt, analyze_session, detect_ball_in_frame
+from .analyzer import (
+    CalibrationError,
+    analyze_putt,
+    analyze_session,
+    detect_ball_in_frame,
+    check_calibration_frame,
+)
 from .db import (
     persist_session,
     create_pending_session,
@@ -402,6 +408,16 @@ async def detect_ball(
         detect_ball_in_frame,
         data, center_x=center_x, search_half_width=search_half_width
     )
+    return JSONResponse(result)
+
+
+@app.post("/calibration-check")
+async def calibration_check(frame: UploadFile = File(...)):
+    """Pre-flight for the iOS "Capture test": given one live frame, report
+    whether the laser gate and the resting ball are both visible, so the player
+    can fix the scene before recording a putt they can't analyze."""
+    data = await frame.read()
+    result = await run_in_threadpool(check_calibration_frame, data)
     return JSONResponse(result)
 
 

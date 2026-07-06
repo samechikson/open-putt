@@ -18,6 +18,9 @@ final class AppSettings: ObservableObject {
     /// Endpoint that queues analysis of an already-uploaded object.
     var analyzeSessionURL: URL? { URL(string: Self.backendBaseURL + "/analyze-session") }
 
+    /// Endpoint that pre-flights a single frame: is the gate + ball visible?
+    var calibrationCheckURL: URL? { URL(string: Self.backendBaseURL + "/calibration-check") }
+
     // MARK: Capture
 
     /// Capture/record resolution.
