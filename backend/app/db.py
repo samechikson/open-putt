@@ -157,6 +157,21 @@ def delete_session(session_id: str) -> None:
     client.table("sessions").delete().eq("id", session_id).execute()
 
 
+def update_session_metadata(
+    session_id: str, length_feet: Optional[int], break_type: Optional[str]
+) -> None:
+    """Update a session's editable metadata (putt distance and break type).
+
+    Both fields are set to exactly what's passed (None clears them). No-op when
+    persistence is disabled."""
+    client = _get_client()
+    if client is None:
+        return
+    client.table("sessions").update(
+        {"length_feet": length_feet, "break_type": break_type}
+    ).eq("id", session_id).execute()
+
+
 def set_session_status(
     session_id: str, status: str, error: Optional[str] = None
 ) -> None:

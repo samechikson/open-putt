@@ -4,7 +4,10 @@ import {
   fetchPutts,
   fetchSessionVideoUrl,
   deleteSession,
+  updateSession,
   subscribeToSession,
+  breakTypeLabel,
+  BREAK_TYPES,
   type SessionRow,
   type PuttRow,
 } from "./sessions";
@@ -125,6 +128,48 @@ export default function SessionDetail({
   const fmt = (n: number | null, digits = 1) =>
     n == null ? "—" : n.toFixed(digits);
 
+  // Metadata editor: distance (feet) and break type. `editing` holds the draft
+  // values, or null when not editing.
+  const [editing, setEditing] = useState<{
+    length: string;
+    breakType: string;
+  } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const startEditing = () => {
+    setSaveError(null);
+    setEditing({
+      length: session?.length_feet == null ? "" : String(session.length_feet),
+      breakType: session?.break_type ?? "",
+    });
+  };
+
+  const handleSaveMetadata = async () => {
+    if (!editing) return;
+    const trimmed = editing.length.trim();
+    const length = trimmed === "" ? null : Number(trimmed);
+    if (length != null && (!Number.isFinite(length) || length < 0)) {
+      setSaveError("Distance must be a non-negative number.");
+      return;
+    }
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const metadata = {
+        length_feet: length == null ? null : Math.round(length),
+        break_type: editing.breakType === "" ? null : editing.breakType,
+      };
+      await updateSession(sessionId, metadata);
+      setSession((prev) => (prev ? { ...prev, ...metadata } : prev));
+      setEditing(null);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : "Could not update session");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const [deleting, setDeleting] = useState(false);
   const handleDelete = async () => {
     if (
@@ -180,6 +225,105 @@ export default function SessionDetail({
       {session === null && (
         <div className="bg-[#1a1a1a] border border-[#3a2020] rounded-xl p-5 text-sm text-[#f87171]">
           {loadError ?? "Failed to load session."}
+        </div>
+      )}
+
+      {session && (
+        <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5 mb-6">
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <h3 className="text-xs font-semibold uppercase tracking-widest text-[#aaa]">
+              Putt Details
+            </h3>
+            {editing == null && (
+              <button
+                type="button"
+                onClick={startEditing}
+                className="px-3 py-1.5 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-xs text-white font-medium transition-all cursor-pointer"
+              >
+                Edit
+              </button>
+            )}
+          </div>
+
+          {editing == null ? (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <div className="text-white font-semibold">
+                  {session.length_feet == null
+                    ? "—"
+                    : `${session.length_feet} ft`}
+                </div>
+                <p className="text-sm text-[#aaa]">distance</p>
+              </div>
+              <div>
+                <div className="text-white font-semibold">
+                  {breakTypeLabel(session.break_type) ?? "—"}
+                </div>
+                <p className="text-sm text-[#aaa]">putt type</p>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <label className="flex flex-col gap-1">
+                  <span className="text-sm text-[#aaa]">Distance (feet)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    inputMode="numeric"
+                    value={editing.length}
+                    onChange={(e) =>
+                      setEditing((d) =>
+                        d ? { ...d, length: e.target.value } : d,
+                      )
+                    }
+                    placeholder="—"
+                    className="bg-[#222] border border-[#333] focus:border-[#22c55e] rounded-lg text-sm text-white px-3 py-2 focus:outline-none"
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-sm text-[#aaa]">Putt type</span>
+                  <select
+                    value={editing.breakType}
+                    onChange={(e) =>
+                      setEditing((d) =>
+                        d ? { ...d, breakType: e.target.value } : d,
+                      )
+                    }
+                    className="bg-[#222] border border-[#333] focus:border-[#22c55e] rounded-lg text-sm text-white px-3 py-2 cursor-pointer focus:outline-none"
+                  >
+                    <option value="">—</option>
+                    {BREAK_TYPES.map((b) => (
+                      <option key={b.value} value={b.value}>
+                        {b.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              {saveError && (
+                <p className="text-sm text-[#f87171]">{saveError}</p>
+              )}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSaveMetadata}
+                  disabled={saving}
+                  className="px-4 py-2 bg-[#22c55e] hover:bg-[#16a34a] disabled:opacity-50 rounded-lg text-sm text-black font-semibold transition-all cursor-pointer"
+                >
+                  {saving ? "Saving…" : "Save"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditing(null)}
+                  disabled={saving}
+                  className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] disabled:opacity-50 rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

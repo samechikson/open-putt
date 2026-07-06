@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   fetchSessions,
   fetchOffsetsForSessions,
+  breakTypeLabel,
   type SessionRow,
   type SessionStatus,
 } from "./sessions";
@@ -216,7 +217,7 @@ export default function Dashboard({
                 <div className="text-xs text-[#888] mt-0.5">
                   {formatDate(s.captured_at ?? s.created_at)}
                   {s.length_feet != null && ` · ${s.length_feet} ft`}
-                  {s.break_type && ` · ${s.break_type}`}
+                  {s.break_type && ` · ${breakTypeLabel(s.break_type)}`}
                 </div>
               </div>
               <div className="text-right shrink-0">

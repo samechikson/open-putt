@@ -24,6 +24,45 @@ export interface SessionRow {
 const SESSION_COLUMNS =
   "id,created_at,captured_at,file_name,length_feet,break_type,putt_count,duration_s,segments_detected,status,error,video_path";
 
+// The `putt_break` enum values with human labels, in menu order (mirror of
+// supabase/migrations/0001_sessions.sql). Used for the session metadata editor
+// and for rendering a break type anywhere in the UI.
+export const BREAK_TYPES: { value: string; label: string }[] = [
+  { value: "straight", label: "Straight" },
+  { value: "leftToRight", label: "Left to right" },
+  { value: "rightToLeft", label: "Right to left" },
+  { value: "uphillStraight", label: "Uphill · straight" },
+  { value: "uphillLeftToRight", label: "Uphill · left to right" },
+  { value: "uphillRightToLeft", label: "Uphill · right to left" },
+  { value: "downhillStraight", label: "Downhill · straight" },
+  { value: "downhillLeftToRight", label: "Downhill · left to right" },
+  { value: "downhillRightToLeft", label: "Downhill · right to left" },
+];
+
+const BREAK_LABELS = new Map(BREAK_TYPES.map((b) => [b.value, b.label]));
+
+// Human label for a stored break_type (falls back to the raw value).
+export function breakTypeLabel(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return BREAK_LABELS.get(value) ?? value;
+}
+
+// Update a session's editable metadata (distance + break type) via the backend
+// (RLS blocks client writes). Pass null to clear a field.
+export async function updateSession(
+  sessionId: string,
+  metadata: { length_feet: number | null; break_type: string | null },
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/sessions/${sessionId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(metadata),
+  });
+  if (!res.ok) {
+    throw new Error(await detailFromResponse(res, "Could not update session"));
+  }
+}
+
 // Delete a session and its putts + video via the backend (RLS blocks client
 // deletes, and the video lives in Cloud Storage).
 export async function deleteSession(sessionId: string): Promise<void> {

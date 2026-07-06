@@ -16,6 +16,7 @@ from .db import (
     set_session_status,
     get_session_video_path,
     delete_session,
+    update_session_metadata,
 )
 from . import cloud
 
@@ -24,6 +25,22 @@ logger = logging.getLogger(__name__)
 # Read uploads off the wire in 1 MiB chunks so a large clip is never held whole
 # in memory — critical for the 200 MB+ session videos.
 _UPLOAD_CHUNK = 1 << 20
+
+# The `putt_break` enum values (mirror of supabase/migrations/0001_sessions.sql).
+# Used to validate the break_type on a session metadata edit.
+_BREAK_TYPES = frozenset(
+    {
+        "straight",
+        "leftToRight",
+        "rightToLeft",
+        "uphillStraight",
+        "uphillLeftToRight",
+        "uphillRightToLeft",
+        "downhillStraight",
+        "downhillLeftToRight",
+        "downhillRightToLeft",
+    }
+)
 
 
 async def _save_upload_to_temp(upload: UploadFile) -> str:
@@ -416,3 +433,32 @@ async def delete_session_endpoint(session_id: str):
         await run_in_threadpool(cloud.delete_object, video_path)
     await run_in_threadpool(delete_session, session_id)
     return JSONResponse({"status": "deleted"})
+
+
+@app.patch("/sessions/{session_id}")
+async def update_session_endpoint(session_id: str, request: Request):
+    """Update a session's editable metadata: putt distance and break type.
+
+    Body: `{length_feet?, break_type?}`. Either may be null to clear it. No
+    ownership check (consistent with the other session endpoints): ids are
+    unguessable UUIDs and the rows are RLS-protected in Supabase.
+    """
+    body = await request.json()
+
+    length_feet = body.get("length_feet")
+    if length_feet is not None:
+        try:
+            length_feet = int(length_feet)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="length_feet must be an integer.")
+        if length_feet < 0:
+            raise HTTPException(status_code=400, detail="length_feet must be non-negative.")
+
+    break_type = body.get("break_type")
+    if break_type is not None and break_type not in _BREAK_TYPES:
+        raise HTTPException(status_code=400, detail="Unknown break_type.")
+
+    await run_in_threadpool(
+        update_session_metadata, session_id, length_feet, break_type
+    )
+    return JSONResponse({"status": "updated"})
