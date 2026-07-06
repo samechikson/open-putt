@@ -1,0 +1,30 @@
+# Cached container build for the Putting Gate backend.
+#
+# `gcloud run deploy --source` rebuilds every layer from scratch each time —
+# reinstalling ffmpeg + all pip deps even for a one-line code change. This build
+# instead pulls the previous image and reuses its layers via BuildKit inline
+# cache, so a code-only change rebuilds just the `COPY app` layer (~30-60s).
+#
+# Submitted with the backend/ dir as context (see cloud-run.sh), so the
+# Dockerfile and its `COPY` paths resolve against it. `_IMAGE` is passed in.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    env:
+      - DOCKER_BUILDKIT=1
+    args:
+      - -c
+      - |
+        docker pull "${_IMAGE}:latest" || true
+        docker build \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --cache-from "${_IMAGE}:latest" \
+          -t "${_IMAGE}:latest" \
+          -f Dockerfile .
+  - name: gcr.io/cloud-builders/docker
+    args: ["push", "${_IMAGE}:latest"]
+images:
+  - "${_IMAGE}:latest"
+options:
+  # A higher-CPU worker speeds up the pip/apt steps on a cold build.
+  machineType: E2_HIGHCPU_8

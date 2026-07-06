@@ -25,8 +25,29 @@ QUEUE="putting-gate-jobs"                 # Cloud Tasks queue
 SA_NAME="putting-gate-run"
 SA_EMAIL="${SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
 CORS_ORIGIN="https://putting-gate-app.vercel.app"
+IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/${SERVICE}"
 
 gcloud config set project "$PROJECT"
+
+# Build the container with layer caching (backend/deploy/cloudbuild.yaml). Only
+# the small backend/ context is uploaded (see backend/.gcloudignore).
+build_image () {
+  gcloud builds submit backend \
+    --config=backend/deploy/cloudbuild.yaml \
+    --substitutions=_IMAGE="$IMAGE"
+}
+
+# Fast redeploy: skip provisioning (steps 1-6b) and just rebuild + ship the
+# image. Env vars, secrets and the service account are preserved from the
+# current revision. Use for code-only changes:
+#   bash backend/deploy/cloud-run.sh --fast
+if [[ "${1:-}" == "--fast" ]]; then
+  build_image
+  gcloud run deploy "$SERVICE" --region="$REGION" --image="${IMAGE}:latest"
+  echo "Redeployed: $(gcloud run services describe "$SERVICE" \
+    --region="$REGION" --format='value(status.url)')"
+  exit 0
+fi
 
 # ---- 1. Enable APIs ---------------------------------------------------------
 gcloud services enable \
@@ -99,10 +120,11 @@ cat > /tmp/gcs-cors.json <<JSON
 JSON
 gcloud storage buckets update "$BUCKET" --cors-file=/tmp/gcs-cors.json
 
-# ---- 7. First deploy (builds from backend/Dockerfile) ----------------------
+# ---- 7. First deploy (cached build from backend/Dockerfile) ----------------
 # PROCESS_URL isn't known yet; deploy once, then set it and redeploy.
+build_image
 gcloud run deploy "$SERVICE" \
-  --source=backend \
+  --image="${IMAGE}:latest" \
   --region="$REGION" \
   --service-account="$SA_EMAIL" \
   --allow-unauthenticated \

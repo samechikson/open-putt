@@ -1,0 +1,20 @@
+# Keep the Cloud Build upload small. `gcloud run deploy --source` / `gcloud
+# builds submit` use THIS file (not .dockerignore) to decide what to upload, and
+# only fall back to a .gitignore that sits inside this directory — which we don't
+# have, so without this every deploy uploaded .venv/ (~220 MB) and
+# tests/fixtures/ (~535 MB of raw clips). Mirror .dockerignore.
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.*
+tests/
+scripts/
+*.log
+.DS_Store
+
+# Deploy tooling isn't needed inside the image/build context.
+deploy/
