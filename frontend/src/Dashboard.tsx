@@ -3,6 +3,11 @@ import {
   fetchSessions,
   fetchOffsetsForSessions,
   breakTypeLabel,
+  breakDirection,
+  lengthBucket,
+  lengthBucketLabel,
+  BREAK_DIRECTIONS,
+  type BreakDirection,
   type SessionRow,
   type SessionStatus,
 } from "./sessions";
@@ -61,6 +66,10 @@ export default function Dashboard({
   const [sessionWindow, setSessionWindow] = useState<SessionWindow>(5);
   // null = loading, array = loaded offsets across the selected sessions.
   const [offsets, setOffsets] = useState<number[] | null>(null);
+  // Session-list filters by putt type: length bucket (3-ft increments) and
+  // break slope direction. "all" = no filter on that dimension.
+  const [lengthFilter, setLengthFilter] = useState<number | "all">("all");
+  const [breakFilter, setBreakFilter] = useState<BreakDirection | "all">("all");
 
   useEffect(() => {
     let cancelled = false;
@@ -78,15 +87,42 @@ export default function Dashboard({
     };
   }, []);
 
-  // The most recent completed sessions in the selected window (rows arrive
-  // newest-first from fetchSessions).
-  const windowSessionIds = useMemo(() => {
+  // The length buckets present across the loaded sessions, so the length filter
+  // only offers ranges that actually have sessions.
+  const lengthBuckets = useMemo(() => {
     if (!sessions) return [];
-    const done = sessions.filter((s) => s.status === "done");
+    const present = new Set<number>();
+    for (const s of sessions) {
+      const b = lengthBucket(s.length_feet);
+      if (b != null) present.add(b);
+    }
+    return [...present].sort((a, b) => a - b);
+  }, [sessions]);
+
+  // Sessions after applying the putt-type filters. Drives both the session list
+  // and the aggregate metrics below, so the whole page reflects the filter.
+  const filteredSessions = useMemo(() => {
+    if (!sessions) return sessions;
+    return sessions.filter((s) => {
+      if (lengthFilter !== "all" && lengthBucket(s.length_feet) !== lengthFilter)
+        return false;
+      if (breakFilter !== "all" && breakDirection(s.break_type) !== breakFilter)
+        return false;
+      return true;
+    });
+  }, [sessions, lengthFilter, breakFilter]);
+
+  const filtersActive = lengthFilter !== "all" || breakFilter !== "all";
+
+  // The most recent completed sessions in the selected window, honouring the
+  // putt-type filters (rows arrive newest-first from fetchSessions).
+  const windowSessionIds = useMemo(() => {
+    if (!filteredSessions) return [];
+    const done = filteredSessions.filter((s) => s.status === "done");
     return (sessionWindow === "all" ? done : done.slice(0, sessionWindow)).map(
       (s) => s.id,
     );
-  }, [sessions, sessionWindow]);
+  }, [filteredSessions, sessionWindow]);
 
   const idsKey = windowSessionIds.join(",");
   useEffect(() => {
@@ -112,9 +148,59 @@ export default function Dashboard({
   return (
     <>
       {sessions && sessions.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 mb-6">
+          <span className="text-xs font-semibold uppercase tracking-widest text-[#888] mr-1">
+            Filter
+          </span>
+          <select
+            value={lengthFilter === "all" ? "all" : String(lengthFilter)}
+            onChange={(e) =>
+              setLengthFilter(
+                e.target.value === "all" ? "all" : Number(e.target.value),
+              )
+            }
+            className="bg-[#222] border border-[#333] hover:border-[#444] rounded-lg text-sm text-white px-3 py-1.5 cursor-pointer focus:outline-none focus:border-[#22c55e]"
+          >
+            <option value="all">All lengths</option>
+            {lengthBuckets.map((b) => (
+              <option key={b} value={b}>
+                {lengthBucketLabel(b)}
+              </option>
+            ))}
+          </select>
+          <select
+            value={breakFilter}
+            onChange={(e) =>
+              setBreakFilter(e.target.value as BreakDirection | "all")
+            }
+            className="bg-[#222] border border-[#333] hover:border-[#444] rounded-lg text-sm text-white px-3 py-1.5 cursor-pointer focus:outline-none focus:border-[#22c55e]"
+          >
+            <option value="all">All breaks</option>
+            {BREAK_DIRECTIONS.map((d) => (
+              <option key={d.value} value={d.value}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+          {filtersActive && (
+            <button
+              type="button"
+              onClick={() => {
+                setLengthFilter("all");
+                setBreakFilter("all");
+              }}
+              className="px-3 py-1.5 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-sm text-[#aaa] font-medium transition-all cursor-pointer"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
+
+      {sessions && sessions.length > 0 && (
         <div className="flex flex-col lg:flex-row gap-6 mb-6">
           <ContributionGraph
-            sessions={sessions}
+            sessions={filteredSessions ?? sessions}
             className="lg:w-1/3 lg:shrink-0 min-w-0"
           />
 
@@ -208,9 +294,20 @@ export default function Dashboard({
         </div>
       )}
 
-      {sessions && sessions.length > 0 && (
+      {sessions &&
+        sessions.length > 0 &&
+        filteredSessions &&
+        filteredSessions.length === 0 && (
+          <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-8 text-center">
+            <p className="text-[#aaa]">
+              No sessions match the selected putt type.
+            </p>
+          </div>
+        )}
+
+      {sessions && sessions.length > 0 && filteredSessions && filteredSessions.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {sessions.map((s) => (
+          {filteredSessions.map((s) => (
             <button
               key={s.id}
               type="button"
