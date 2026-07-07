@@ -47,6 +47,45 @@ export function breakTypeLabel(value: string | null | undefined): string | null 
   return BREAK_LABELS.get(value) ?? value;
 }
 
+// The left/right slope of a putt, collapsing the uphill/downhill break_type
+// variants down to just their break direction (used for filtering). Straight
+// putts (no break) map to "straight"; a missing break_type has no direction.
+export type BreakDirection = "leftToRight" | "rightToLeft" | "straight";
+
+export function breakDirection(
+  value: string | null | undefined,
+): BreakDirection | null {
+  if (!value) return null;
+  const v = value.toLowerCase();
+  if (v.includes("lefttoright")) return "leftToRight";
+  if (v.includes("righttoleft")) return "rightToLeft";
+  return "straight";
+}
+
+// Human labels for the break-direction filter, in menu order.
+export const BREAK_DIRECTIONS: { value: BreakDirection; label: string }[] = [
+  { value: "leftToRight", label: "Left to right" },
+  { value: "rightToLeft", label: "Right to left" },
+  { value: "straight", label: "Straight" },
+];
+
+// Putt lengths are filtered in three-foot buckets.
+export const LENGTH_BUCKET_FEET = 3;
+
+// The 0-based length bucket for a putt, in three-foot increments (1–3 ft → 0,
+// 4–6 ft → 1, …). Missing or non-positive lengths have no bucket.
+export function lengthBucket(feet: number | null | undefined): number | null {
+  if (feet == null || feet <= 0) return null;
+  return Math.floor((feet - 1) / LENGTH_BUCKET_FEET);
+}
+
+// Human label for a length bucket index (e.g. "4–6 ft").
+export function lengthBucketLabel(bucket: number): string {
+  const lo = bucket * LENGTH_BUCKET_FEET + 1;
+  const hi = (bucket + 1) * LENGTH_BUCKET_FEET;
+  return `${lo}–${hi} ft`;
+}
+
 // Update a session's editable metadata (distance + break type) via the backend
 // (RLS blocks client writes). Pass null to clear a field.
 export async function updateSession(
