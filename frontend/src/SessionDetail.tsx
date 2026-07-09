@@ -65,9 +65,10 @@ export default function SessionDetail({
         });
     };
 
-    // A finished session with a retained video: fetch a signed playback URL.
+    // Any session with a retained video (done, or errored after retention):
+    // fetch a signed playback URL so the clip can be reviewed.
     const loadVideo = (row: SessionRow) => {
-      if (row.status !== "done" || !row.video_path) return;
+      if (!row.video_path) return;
       fetchSessionVideoUrl(sessionId)
         .then((url) => {
           if (!cancelled) setVideoUrl(url);
@@ -86,8 +87,8 @@ export default function SessionDetail({
         setSession(row);
         if (row.status === "done") {
           loadPutts();
-          loadVideo(row);
         }
+        loadVideo(row);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -101,8 +102,8 @@ export default function SessionDetail({
       setSession(row);
       if (row.status === "done") {
         loadPutts();
-        loadVideo(row);
       }
+      loadVideo(row);
     });
 
     return () => {
@@ -343,9 +344,24 @@ export default function SessionDetail({
       )}
 
       {status === "error" && (
-        <div className="bg-[#1a1a1a] border border-[#3a2020] rounded-xl p-5 text-sm text-[#f87171]">
-          {session?.error ?? "Analysis failed."}
-        </div>
+        <>
+          <div className="bg-[#1a1a1a] border border-[#3a2020] rounded-xl p-5 text-sm text-[#f87171] mb-6">
+            {session?.error ?? "Analysis failed."}
+          </div>
+          {videoUrl && (
+            <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-3">
+              <video
+                src={videoUrl}
+                controls
+                playsInline
+                className="w-full max-h-[28rem] rounded-lg bg-black"
+              />
+              <p className="text-xs text-[#666] mt-2 px-1">
+                Your recording, kept so you can review what happened.
+              </p>
+            </div>
+          )}
+        </>
       )}
 
       {status === "done" && (
