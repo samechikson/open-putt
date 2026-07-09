@@ -173,16 +173,22 @@ def update_session_metadata(
 
 
 def set_session_status(
-    session_id: str, status: str, error: Optional[str] = None
+    session_id: str,
+    status: str,
+    error: Optional[str] = None,
+    video_path: Optional[str] = None,
 ) -> None:
-    """Update a session's status (and optional error message). No-op when
-    persistence is disabled."""
+    """Update a session's status (and optional error message). Pass `video_path`
+    to also record the retained video for a session that ended in error, so the
+    clip stays linked to the row for review and cleanup. No-op when persistence
+    is disabled."""
     client = _get_client()
     if client is None:
         return
-    client.table("sessions").update({"status": status, "error": error}).eq(
-        "id", session_id
-    ).execute()
+    update: dict[str, Any] = {"status": status, "error": error}
+    if video_path is not None:
+        update["video_path"] = video_path
+    client.table("sessions").update(update).eq("id", session_id).execute()
 
 
 def persist_session(

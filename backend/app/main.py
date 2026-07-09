@@ -234,8 +234,9 @@ async def analyze_session_endpoint(request: Request):
                 },
             )
         except Exception:  # noqa: BLE001
-            await run_in_threadpool(set_session_status, session_id, "error", "Could not start analysis.")
-            await run_in_threadpool(cloud.delete_object, object_name)
+            # The row already exists, so retain the clip (rather than lose it) and
+            # record the failure on the row before returning.
+            await _record_error(session_id, object_name, "Could not start analysis.")
             logger.exception("Failed to enqueue task for session %s", session_id)
             raise HTTPException(status_code=503, detail="Could not queue analysis. Try again.")
 
@@ -244,9 +245,25 @@ async def analyze_session_endpoint(request: Request):
     )
 
 
+async def _retain_video(object_name: str) -> str:
+    """Copy the transient `uploads/` clip to the retained `sessions/` prefix
+    (kept for playback/review) and return the retained object path. The caller
+    drops the `uploads/` copy once the outcome is terminal."""
+    retained = cloud.retained_object_name(object_name)
+    await run_in_threadpool(cloud.copy_object, object_name, retained)
+    return retained
+
+
 async def _record_error(session_id: str, object_name: str, message: str) -> None:
-    """Terminal failure: record the message on the row and drop the upload."""
-    await run_in_threadpool(set_session_status, session_id, "error", message)
+    """Terminal failure: retain the video for review, record the message and the
+    retained video path on the row, then drop the transient upload.
+
+    Every recorded clip is kept in `sessions/` regardless of the analysis
+    outcome, so no putt a player captured is ever lost to a calibration miss,
+    a no-putt clip, or an unexpected failure.
+    """
+    retained = await _retain_video(object_name)
+    await run_in_threadpool(set_session_status, session_id, "error", message, retained)
     await run_in_threadpool(cloud.delete_object, object_name)
 
 
@@ -290,8 +307,7 @@ async def _process_session(
 
         # Retain the video for playback: copy it to the 90-day `sessions/` prefix
         # and record the path, then drop the transient `uploads/` copy.
-        retained = cloud.retained_object_name(object_name)
-        await run_in_threadpool(cloud.copy_object, object_name, retained)
+        retained = await _retain_video(object_name)
         await run_in_threadpool(
             persist_session, session_id, {**metadata, "video_path": retained}, result
         )
