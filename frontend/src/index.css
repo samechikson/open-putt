@@ -7,13 +7,27 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+html {
+  /* Stop iOS Safari from auto-inflating text on rotation/zoom — a common
+     cause of unexpected horizontal overflow on phones — and guard the
+     viewport against any stray horizontal scroll. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  overflow-x: hidden;
+}
+
 body {
   margin: 0;
   background: #0d0d0d;
   color: #d0d0d0;
   font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  overflow-x: hidden;
+  /* Long unbreakable strings (filenames, emails) wrap instead of forcing width. */
+  overflow-wrap: break-word;
 }
 
 #root {
   min-height: 100svh;
+  width: 100%;
+  overflow-x: hidden;
 }
