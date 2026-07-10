@@ -403,8 +403,8 @@ export default function SessionDetail({
           </div>
 
           {putts.length > 0 && (
-            <div className="bg-[#1a1a1a] border border-[#333] rounded-xl overflow-hidden">
-              <table className="w-full text-sm">
+            <div className="bg-[#1a1a1a] border border-[#333] rounded-xl overflow-x-auto">
+              <table className="w-full text-sm min-w-[20rem]">
                 <thead>
                   <tr className="text-left text-xs uppercase tracking-widest text-[#888] border-b border-[#333]">
                     <th className="px-4 py-3 font-semibold">#</th>
