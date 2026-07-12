@@ -11,6 +11,7 @@ import {
   type SessionRow,
   type PuttRow,
 } from "./sessions";
+import { fetchPutters, type PutterRow } from "./putters";
 import { biasWord, golferSide } from "./analysis";
 import { mean, stdev } from "./stats";
 
@@ -27,6 +28,7 @@ export default function SessionDetail({
     undefined,
   );
   const [putts, setPutts] = useState<PuttRow[]>([]);
+  const [putters, setPutters] = useState<PutterRow[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -112,6 +114,25 @@ export default function SessionDetail({
     };
   }, [sessionId]);
 
+  // The user's putters, for tagging this session (and resolving its putter name).
+  useEffect(() => {
+    let cancelled = false;
+    fetchPutters()
+      .then((rows) => {
+        if (!cancelled) setPutters(rows);
+      })
+      .catch(() => {
+        /* putter tagging is optional; the rest of the view still works */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const activePutter = putters.find((p) => p.is_active) ?? null;
+  const sessionPutter =
+    putters.find((p) => p.id === session?.putter_id) ?? null;
+
   const status = session?.status;
   const pending = status === "queued" || status === "processing";
 
@@ -129,11 +150,12 @@ export default function SessionDetail({
   const fmt = (n: number | null, digits = 1) =>
     n == null ? "—" : n.toFixed(digits);
 
-  // Metadata editor: distance (feet) and break type. `editing` holds the draft
-  // values, or null when not editing.
+  // Metadata editor: distance (feet), break type, and putter. `editing` holds
+  // the draft values, or null when not editing.
   const [editing, setEditing] = useState<{
     length: string;
     breakType: string;
+    putterId: string;
   } | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -143,6 +165,8 @@ export default function SessionDetail({
     setEditing({
       length: session?.length_feet == null ? "" : String(session.length_feet),
       breakType: session?.break_type ?? "",
+      // Default to the session's putter, or the active putter when un-tagged.
+      putterId: session?.putter_id ?? activePutter?.id ?? "",
     });
   };
 
@@ -160,6 +184,7 @@ export default function SessionDetail({
       const metadata = {
         length_feet: length == null ? null : Math.round(length),
         break_type: editing.breakType === "" ? null : editing.breakType,
+        putter_id: editing.putterId === "" ? null : editing.putterId,
       };
       await updateSession(sessionId, metadata);
       setSession((prev) => (prev ? { ...prev, ...metadata } : prev));
@@ -247,7 +272,7 @@ export default function SessionDetail({
           </div>
 
           {editing == null ? (
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
               <div>
                 <div className="text-white font-semibold">
                   {session.length_feet == null
@@ -261,6 +286,12 @@ export default function SessionDetail({
                   {breakTypeLabel(session.break_type) ?? "—"}
                 </div>
                 <p className="text-sm text-[#aaa]">putt type</p>
+              </div>
+              <div>
+                <div className="text-white font-semibold truncate">
+                  {sessionPutter?.name ?? "—"}
+                </div>
+                <p className="text-sm text-[#aaa]">putter</p>
               </div>
             </div>
           ) : (
@@ -297,6 +328,26 @@ export default function SessionDetail({
                     {BREAK_TYPES.map((b) => (
                       <option key={b.value} value={b.value}>
                         {b.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-sm text-[#aaa]">Putter</span>
+                  <select
+                    value={editing.putterId}
+                    onChange={(e) =>
+                      setEditing((d) =>
+                        d ? { ...d, putterId: e.target.value } : d,
+                      )
+                    }
+                    className="bg-[#222] border border-[#333] focus:border-[#22c55e] rounded-lg text-sm text-white px-3 py-2 cursor-pointer focus:outline-none"
+                  >
+                    <option value="">—</option>
+                    {putters.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                        {p.is_active ? " (active)" : ""}
                       </option>
                     ))}
                   </select>

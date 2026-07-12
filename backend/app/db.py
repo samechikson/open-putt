@@ -158,17 +158,24 @@ def delete_session(session_id: str) -> None:
 
 
 def update_session_metadata(
-    session_id: str, length_feet: Optional[int], break_type: Optional[str]
+    session_id: str,
+    length_feet: Optional[int],
+    break_type: Optional[str],
+    putter_id: Optional[str],
 ) -> None:
-    """Update a session's editable metadata (putt distance and break type).
+    """Update a session's editable metadata (putt distance, break type, putter).
 
-    Both fields are set to exactly what's passed (None clears them). No-op when
+    Each field is set to exactly what's passed (None clears them). No-op when
     persistence is disabled."""
     client = _get_client()
     if client is None:
         return
     client.table("sessions").update(
-        {"length_feet": length_feet, "break_type": break_type}
+        {
+            "length_feet": length_feet,
+            "break_type": break_type,
+            "putter_id": putter_id,
+        }
     ).eq("id", session_id).execute()
 
 

@@ -11,6 +11,7 @@ import {
   type SessionRow,
   type SessionStatus,
 } from "./sessions";
+import { fetchPutters } from "./putters";
 import { biasWord, golferSide } from "./analysis";
 import { mean } from "./stats";
 import ContributionGraph from "./ContributionGraph";
@@ -63,6 +64,10 @@ export default function Dashboard({
     undefined,
   );
   const [error, setError] = useState<string | null>(null);
+  // Map of putter id → name, to label session cards with their putter.
+  const [putterNames, setPutterNames] = useState<Map<string, string>>(
+    new Map(),
+  );
   const [sessionWindow, setSessionWindow] = useState<SessionWindow>(5);
   // null = loading, array = loaded offsets across the selected sessions.
   const [offsets, setOffsets] = useState<number[] | null>(null);
@@ -81,6 +86,21 @@ export default function Dashboard({
         if (cancelled) return;
         setError(e instanceof Error ? e.message : "Failed to load sessions");
         setSessions(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchPutters()
+      .then((rows) => {
+        if (!cancelled)
+          setPutterNames(new Map(rows.map((p) => [p.id, p.name])));
+      })
+      .catch(() => {
+        // Putter labels are cosmetic; leave cards un-labelled on failure.
       });
     return () => {
       cancelled = true;
@@ -325,6 +345,9 @@ export default function Dashboard({
                   {formatDate(s.captured_at ?? s.created_at)}
                   {s.length_feet != null && ` · ${s.length_feet} ft`}
                   {s.break_type && ` · ${breakTypeLabel(s.break_type)}`}
+                  {s.putter_id &&
+                    putterNames.has(s.putter_id) &&
+                    ` · ${putterNames.get(s.putter_id)}`}
                 </div>
               </div>
               <div className="text-right shrink-0">
