@@ -1,8 +1,10 @@
--- Cloud SQL (PostgreSQL) schema for the Putting Gate app.
+-- Consolidated PostgreSQL schema for the Putting Gate app.
 --
--- Ported from the original Supabase migrations (supabase/migrations/0001..0003)
--- with the Supabase-specific pieces removed, because Cloud SQL is a plain
--- Postgres with no GoTrue/PostgREST/RLS layer:
+-- The live database is Supabase Postgres (evolved via supabase/migrations/,
+-- through 0004 which brings it to this shape). This single file is the
+-- equivalent greenfield schema — handy for spinning up a local Postgres for
+-- tests. It drops the Supabase-specific pieces, since the backend is now the
+-- only DB client (no GoTrue/PostgREST/RLS in the request path):
 --   * user_id is `text` (Firebase UIDs are strings, not UUIDs) and has no FK to
 --     an `auth.users` table (there is none here).
 --   * No Row-Level Security / policies — the backend is the only DB client and

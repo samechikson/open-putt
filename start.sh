@@ -12,10 +12,11 @@ export LOCAL_MODE=1
 # single dev user. Unset this to exercise real Firebase ID tokens.
 export AUTH_DEV_UID="${AUTH_DEV_UID:-local-dev-user}"
 
-# Database: point at a local Postgres to exercise persistence + the sessions/
-# putters endpoints. If unset, the backend fails soft (analysis works, but the
-# DB-backed reads/writes no-op). Create it once with:
-#   createdb putting_gate && psql putting_gate -f backend/db/schema.sql
+# Database: point at a Postgres to exercise persistence + the sessions/putters
+# endpoints. Use a local Postgres (createdb putting_gate && psql putting_gate -f
+# backend/db/schema.sql), or set DATABASE_URL to the Supabase pooler connection
+# string to hit the real data. If unset, the backend fails soft (analysis works,
+# but DB-backed reads/writes no-op).
 export DATABASE_URL="${DATABASE_URL:-postgresql://localhost/putting_gate}"
 
 # Backend

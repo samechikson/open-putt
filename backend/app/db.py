@@ -1,17 +1,19 @@
-"""Cloud SQL (Postgres) persistence for the Putting Gate app.
+"""Postgres persistence for the Putting Gate app.
 
 This is the *only* database client in the system: the browser and iOS app no
 longer talk to the DB directly (as they did with Supabase's PostgREST + RLS), so
 every read and write goes through here, and ownership is enforced in SQL via a
 `user_id` (the Firebase UID) on each query.
 
+The database stays on Supabase (Postgres); we just connect straight to it with
+`psycopg` (via Supabase's connection pooler) instead of the PostgREST client, so
+the backend can run real SQL/transactions and bypass RLS as the service role.
+
 Connection: a plain `psycopg` connection pool built from env.
-  * On Cloud Run, `--add-cloudsql-instances` mounts a Unix socket; set
-    `DB_HOST=/cloudsql/<INSTANCE_CONNECTION_NAME>`, `DB_NAME`, `DB_USER`,
-    `DB_PASSWORD`.
-  * Locally / anywhere, set `DATABASE_URL` (a libpq conninfo/URL) instead.
+  * `DATABASE_URL` (a libpq conninfo/URL) — e.g. the Supabase pooler string.
+  * or `DB_HOST` / `DB_NAME` / `DB_USER` / `DB_PASSWORD`.
 It fails soft: if nothing is configured the calls no-op (local analysis keeps
-working without a DB), mirroring the previous Supabase behavior.
+working without a DB).
 """
 
 from __future__ import annotations
@@ -85,7 +87,10 @@ def _get_pool():
         conninfo,
         min_size=1,
         max_size=4,
-        kwargs={"row_factory": dict_row},
+        # prepare_threshold=None disables server-side prepared statements, which
+        # Supabase's transaction-mode connection pooler (Supavisor) doesn't
+        # support; harmless on a direct/session connection.
+        kwargs={"row_factory": dict_row, "prepare_threshold": None},
         open=True,
     )
     return _pool
