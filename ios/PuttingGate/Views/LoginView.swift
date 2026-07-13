@@ -79,10 +79,35 @@ struct LoginView: View {
                     .font(.footnote)
             }
 
+            if mode == .signIn {
+                Button("Forgot password?", action: resetPassword)
+                    .font(.footnote)
+                    .disabled(busy)
+            }
+
             Spacer()
             Spacer()
         }
         .padding()
+    }
+
+    private func resetPassword() {
+        guard !email.isEmpty else {
+            errorText = "Enter your email above first, then tap Forgot password."
+            return
+        }
+        busy = true
+        errorText = nil
+        notice = nil
+        Task {
+            do {
+                try await auth.resetPassword(email: email)
+                notice = "Password reset email sent. Check your inbox."
+            } catch {
+                errorText = error.localizedDescription
+            }
+            busy = false
+        }
     }
 
     private func submit() {

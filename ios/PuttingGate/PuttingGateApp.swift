@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import FirebaseCore
 
 @main
 struct PuttingGateApp: App {
@@ -10,6 +11,10 @@ struct PuttingGateApp: App {
     @StateObject private var auth: AuthManager
 
     init() {
+        // Must run before any Firebase API (AuthManager below). Reads
+        // GoogleService-Info.plist bundled in the app target.
+        FirebaseApp.configure()
+
         let container: ModelContainer
         do {
             container = try ModelContainer(for: Recording.self)

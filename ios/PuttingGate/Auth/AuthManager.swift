@@ -1,104 +1,74 @@
 import Foundation
 import Combine
+import FirebaseAuth
 
-/// Observable auth state for the app. Owns the current session, persists it to
-/// the Keychain, and hands out valid access tokens (refreshing when needed).
+/// Observable auth state for the app, backed by Firebase Auth. Firebase persists
+/// the session (Keychain) and refreshes ID tokens itself, so this is a thin
+/// wrapper: it mirrors Firebase's auth state into `state` and hands out fresh ID
+/// tokens for the backend to verify.
 @MainActor
 final class AuthManager: ObservableObject {
 
-    enum State: Equatable {
-        case loading      // restoring a persisted session on launch
+    enum State: Equatable, Sendable {
+        case loading      // resolving the persisted session on launch
         case signedOut
         case signedIn(AuthUser)
     }
 
     @Published private(set) var state: State = .loading
 
-    private let service = AuthService()
-    private var session: AuthSession? {
-        didSet { persist() }
-    }
+    private var listener: AuthStateDidChangeListenerHandle?
 
-    /// User id of the signed-in user, for tagging uploads.
-    var userID: String? { session?.user.id }
+    /// UID of the signed-in user. (The backend derives the owner from the ID
+    /// token; this is kept for convenience/telemetry.)
+    var userID: String? { Auth.auth().currentUser?.uid }
 
     init() {
-        restore()
-    }
-
-    // MARK: - Session lifecycle
-
-    private func restore() {
-        guard let data = KeychainStore.load(),
-              let saved = try? JSONDecoder().decode(AuthSession.self, from: data) else {
-            state = .signedOut
-            return
-        }
-        session = saved
-        state = .signedIn(saved.user)
-        // Proactively refresh an expired token; sign out if that fails.
-        if saved.isExpired {
-            Task { await refreshOrSignOut() }
+        // Fires immediately with the restored user (or nil), then on every
+        // sign-in / sign-out. Firebase invokes this on the main thread; hop
+        // through a MainActor Task to satisfy isolation.
+        listener = Auth.auth().addStateDidChangeListener { [weak self] _, user in
+            let newState: State = user
+                .map { .signedIn(AuthUser(id: $0.uid, email: $0.email)) }
+                ?? .signedOut
+            Task { @MainActor in self?.state = newState }
         }
     }
+
+    deinit {
+        if let listener { Auth.auth().removeStateDidChangeListener(listener) }
+    }
+
+    // MARK: - Actions
 
     func signIn(email: String, password: String) async throws {
-        let session = try await service.signIn(email: email, password: password)
-        self.session = session
-        state = .signedIn(session.user)
+        _ = try await Auth.auth().signIn(withEmail: email, password: password)
     }
 
-    /// Returns true if a session was established (confirmation disabled); false
-    /// when a confirmation email was sent and the user must confirm first.
+    /// Create an account. Firebase signs the new user in immediately, so this
+    /// always returns true (the Bool is kept for call-site compatibility).
+    @discardableResult
     func signUp(email: String, password: String) async throws -> Bool {
-        guard let session = try await service.signUp(email: email, password: password) else {
-            return false
-        }
-        self.session = session
-        state = .signedIn(session.user)
+        _ = try await Auth.auth().createUser(withEmail: email, password: password)
         return true
     }
 
     func signOut() async {
-        if let token = session?.accessToken {
-            await service.signOut(accessToken: token)
-        }
-        session = nil
-        state = .signedOut
+        try? Auth.auth().signOut()
+    }
+
+    /// Send a password-reset email (needed by users migrated from Supabase, who
+    /// must set a new password).
+    func resetPassword(email: String) async throws {
+        try await Auth.auth().sendPasswordReset(withEmail: email)
     }
 
     // MARK: - Tokens
 
-    /// A currently-valid access token, refreshing first if it has expired.
-    /// Returns nil when there's no session or a refresh fails.
+    /// A currently-valid Firebase ID token (refreshed automatically), or nil
+    /// when there's no signed-in user.
     func validAccessToken() async -> String? {
-        guard let current = session else { return nil }
-        if !current.isExpired { return current.accessToken }
-        await refreshOrSignOut()
-        return session?.accessToken
-    }
-
-    private func refreshOrSignOut() async {
-        guard let refreshToken = session?.refreshToken else { return }
-        do {
-            let refreshed = try await service.refresh(refreshToken: refreshToken)
-            session = refreshed
-            state = .signedIn(refreshed.user)
-        } catch {
-            session = nil
-            state = .signedOut
-        }
-    }
-
-    // MARK: - Persistence
-
-    private func persist() {
-        guard let session else {
-            KeychainStore.clear()
-            return
-        }
-        if let data = try? JSONEncoder().encode(session) {
-            KeychainStore.save(data)
-        }
+        guard let user = Auth.auth().currentUser else { return nil }
+        return try? await user.getIDToken()
     }
 }

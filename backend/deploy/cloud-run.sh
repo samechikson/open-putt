@@ -24,6 +24,12 @@ BUCKET="gs://${PROJECT}-uploads"          # must be globally unique
 QUEUE="putting-gate-jobs"                 # Cloud Tasks queue
 SA_NAME="putting-gate-run"
 SA_EMAIL="${SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
+# Cloud SQL (Postgres). Provision the instance separately (see
+# docs/migration-firebase-cloudsql.md); this script wires the service to it.
+DB_INSTANCE="putting-gate-db"
+DB_NAME="putting_gate"
+DB_USER="app"
+DB_CONN="${PROJECT}:${REGION}:${DB_INSTANCE}"   # instance connection name
 # Frontend origin, used for the GCS bucket CORS (direct browser uploads) and the
 # backend's CORS_ALLOW_ORIGINS secret. The web app is served from Firebase
 # Hosting, which also proxies /api to this service (so API calls are same-origin).
@@ -87,8 +93,7 @@ create_secret () {  # name value — replaces the latest version
   printf '%s' "$2" | gcloud secrets create "$1" --data-file=- 2>/dev/null \
     || printf '%s' "$2" | gcloud secrets versions add "$1" --data-file=-
 }
-create_secret SUPABASE_URL         "$SUPABASE_URL"
-create_secret SUPABASE_SECRET_KEY  "$SUPABASE_SECRET_KEY"
+create_secret DB_PASSWORD          "$DB_PASSWORD"
 create_secret CORS_ALLOW_ORIGINS   "$CORS_ORIGIN"
 # The internal token protects /process; generate once and keep it stable across
 # re-runs (rotating it would 403 any in-flight tasks).
@@ -108,11 +113,14 @@ gcloud storage buckets add-iam-policy-binding "$BUCKET" \
   --member="serviceAccount:${SA_EMAIL}" --role=roles/storage.objectAdmin
 gcloud projects add-iam-policy-binding "$PROJECT" \
   --member="serviceAccount:${SA_EMAIL}" --role=roles/cloudtasks.enqueuer
+# Connect to Cloud SQL over the mounted Unix socket.
+gcloud projects add-iam-policy-binding "$PROJECT" \
+  --member="serviceAccount:${SA_EMAIL}" --role=roles/cloudsql.client
 # Sign upload URLs via the IAM signBlob API (no private key on Cloud Run):
 # the SA must be able to create tokens for itself.
 gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
   --member="serviceAccount:${SA_EMAIL}" --role=roles/iam.serviceAccountTokenCreator
-for S in SUPABASE_URL SUPABASE_SECRET_KEY CORS_ALLOW_ORIGINS TASKS_INTERNAL_TOKEN; do
+for S in DB_PASSWORD CORS_ALLOW_ORIGINS TASKS_INTERNAL_TOKEN; do
   gcloud secrets add-iam-policy-binding "$S" \
     --member="serviceAccount:${SA_EMAIL}" --role=roles/secretmanager.secretAccessor
 done
@@ -131,9 +139,10 @@ gcloud run deploy "$SERVICE" \
   --region="$REGION" \
   --service-account="$SA_EMAIL" \
   --allow-unauthenticated \
+  --add-cloudsql-instances="$DB_CONN" \
   --cpu=2 --memory=2Gi --timeout=3600 --concurrency=2 --min-instances=0 --max-instances=3 \
-  --set-env-vars="GCP_PROJECT=${PROJECT},GCS_BUCKET=${PROJECT}-uploads,TASKS_QUEUE=${QUEUE},TASKS_LOCATION=${REGION},GCS_SIGNER_SA=${SA_EMAIL}" \
-  --set-secrets="SUPABASE_URL=SUPABASE_URL:latest,SUPABASE_SECRET_KEY=SUPABASE_SECRET_KEY:latest,CORS_ALLOW_ORIGINS=CORS_ALLOW_ORIGINS:latest,TASKS_INTERNAL_TOKEN=TASKS_INTERNAL_TOKEN:latest"
+  --set-env-vars="GCP_PROJECT=${PROJECT},GCS_BUCKET=${PROJECT}-uploads,TASKS_QUEUE=${QUEUE},TASKS_LOCATION=${REGION},GCS_SIGNER_SA=${SA_EMAIL},FIREBASE_PROJECT_ID=${PROJECT},DB_HOST=/cloudsql/${DB_CONN},DB_NAME=${DB_NAME},DB_USER=${DB_USER}" \
+  --set-secrets="DB_PASSWORD=DB_PASSWORD:latest,CORS_ALLOW_ORIGINS=CORS_ALLOW_ORIGINS:latest,TASKS_INTERNAL_TOKEN=TASKS_INTERNAL_TOKEN:latest"
 
 # ---- 8. Wire PROCESS_URL and redeploy env ----------------------------------
 URL="$(gcloud run services describe "$SERVICE" --region="$REGION" --format='value(status.url)')"
