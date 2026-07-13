@@ -21,5 +21,6 @@ COPY app ./app
 EXPOSE 8000
 
 # Single worker: video analysis is CPU-bound and memory-heavy, so scale with
-# Fly machines rather than in-process workers.
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
+# Cloud Run instances rather than in-process workers. `application` mounts the
+# API under /api (see app/main.py).
+CMD ["sh", "-c", "uvicorn app.main:application --host 0.0.0.0 --port ${PORT}"]

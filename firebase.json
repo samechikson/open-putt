@@ -1,0 +1,14 @@
+{
+  "hosting": {
+    "public": "frontend/dist",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "predeploy": ["npm --prefix frontend run build"],
+    "rewrites": [
+      {
+        "source": "/api/**",
+        "run": { "serviceId": "putting-gate-backend", "region": "us-central1" }
+      },
+      { "source": "**", "destination": "/index.html" }
+    ]
+  }
+}

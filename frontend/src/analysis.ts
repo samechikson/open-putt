@@ -86,9 +86,11 @@ export const DEFAULT_CAL: CalibrationValues = {
   gateWidthMm: 100,
 };
 
-// Backend base URL. Defaults to the local dev server; set VITE_API_BASE to the
-// deployed Fly.io URL in production (see .env.production).
-export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+// Backend base URL. Same-origin `/api` by default: in production Firebase
+// Hosting rewrites /api/** to Cloud Run (no CORS); in dev the Vite server
+// proxies /api to the local backend (see vite.config.ts). Overridable via
+// VITE_API_BASE (see .env.production).
+export const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";
 
 // Estimate a clip's frame rate by briefly (muted) playing it and measuring the
 // gap between presented frames via requestVideoFrameCallback — more reliable

@@ -134,13 +134,16 @@ gcloud run deploy "$SERVICE" \
 
 # ---- 8. Wire PROCESS_URL and redeploy env ----------------------------------
 URL="$(gcloud run services describe "$SERVICE" --region="$REGION" --format='value(status.url)')"
+# The API is mounted under /api (see backend/app/main.py), so the Cloud Tasks
+# callback targets /api/process.
 gcloud run services update "$SERVICE" --region="$REGION" \
-  --update-env-vars="PROCESS_URL=${URL}/process"
+  --update-env-vars="PROCESS_URL=${URL}/api/process"
 
 echo
-echo "Deployed: $URL"
+echo "Deployed: $URL  (API served under ${URL}/api)"
 echo "Next:"
-echo "  • Set Vercel env VITE_API_BASE=$URL and redeploy the frontend"
-echo "  • Update ios AppSettings.backendBaseURL to $URL"
-echo "  • Smoke test: curl -X POST $URL/uploads -H 'Content-Type: application/json' -d '{\"filename\":\"clip.mov\"}'"
-echo "    (should return a signed upload_url; PUT a file to it, then POST /analyze-session)"
+echo "  • Frontend: served by Firebase Hosting, which proxies /api/** here"
+echo "    (firebase.json); run 'firebase deploy --only hosting'"
+echo "  • iOS AppSettings.backendBaseURL is ${URL}/api"
+echo "  • Smoke test: curl -X POST $URL/api/uploads -H 'Content-Type: application/json' -d '{\"filename\":\"clip.mov\"}'"
+echo "    (should return a signed upload_url; PUT a file to it, then POST /api/analyze-session)"

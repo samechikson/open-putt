@@ -501,3 +501,15 @@ async def update_session_endpoint(session_id: str, request: Request):
         update_session_metadata, session_id, length_feet, break_type, putter_id
     )
     return JSONResponse({"status": "updated"})
+
+
+# The public API is served under /api so the app can sit behind a same-origin
+# proxy: Firebase Hosting rewrites `/api/**` to this Cloud Run service, so the
+# web frontend never makes a cross-origin API call. Every caller targets the
+# same prefix — the frontend (VITE_API_BASE=/api), the iOS app
+# (AppSettings.backendBaseURL + /api), and the Cloud Tasks callback
+# (PROCESS_URL=.../api/process). The routes above stay defined at the root; this
+# outer app is a thin mount. uvicorn serves `application` (see Dockerfile /
+# start.sh).
+application = FastAPI(title="Putting Gate Analyzer (proxy root)")
+application.mount("/api", app)

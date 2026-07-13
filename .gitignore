@@ -40,3 +40,6 @@ backend/tests/fixtures/*
 
 # Supabase CLI scratch
 supabase/.temp/
+
+# Firebase local deploy cache
+.firebase/

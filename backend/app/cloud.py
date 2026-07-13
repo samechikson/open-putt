@@ -38,9 +38,10 @@ TASK_TOKEN_HEADER = "X-Tasks-Token"
 
 # Local mode (LOCAL_MODE=1): storage is a local directory and analysis runs
 # in-process, so the whole flow works on a laptop with no GCP. The upload/
-# playback URLs point back at this backend (LOCAL_BASE_URL).
+# playback URLs point back at this backend (LOCAL_BASE_URL). The API is mounted
+# under /api (see app/main.py), so the base includes that prefix.
 LOCAL_MODE = os.environ.get("LOCAL_MODE") == "1"
-LOCAL_BASE_URL = os.environ.get("LOCAL_BASE_URL", "http://localhost:8000")
+LOCAL_BASE_URL = os.environ.get("LOCAL_BASE_URL", "http://localhost:8000/api")
 LOCAL_STORAGE_DIR = Path(
     os.environ.get("LOCAL_STORAGE_DIR", Path(tempfile.gettempdir()) / "putting-gate-local")
 )

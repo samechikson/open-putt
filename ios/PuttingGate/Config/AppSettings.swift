@@ -9,8 +9,10 @@ final class AppSettings: ObservableObject {
     // MARK: Backend
 
     /// Base URL of the deployed backend on Cloud Run. Hardcoded so the app
-    /// always talks to production; not user-configurable.
-    static let backendBaseURL = "https://putting-gate-backend-tksj5yumxa-uc.a.run.app"
+    /// always talks to production; not user-configurable. The API is mounted
+    /// under /api (see backend/app/main.py); iOS calls Cloud Run directly, so
+    /// the prefix is part of the base URL.
+    static let backendBaseURL = "https://putting-gate-backend-tksj5yumxa-uc.a.run.app/api"
 
     /// Endpoint that mints a signed Cloud Storage upload URL.
     var uploadsURL: URL? { URL(string: Self.backendBaseURL + "/uploads") }
