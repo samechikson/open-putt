@@ -37,8 +37,16 @@ jobs:
         run: npm ci
         working-directory: frontend
 
+      # Vite bakes VITE_* into the bundle at build time. The build runs inside
+      # this step via firebase.json's predeploy hook, which inherits this env.
+      # The Supabase values are the public anon/publishable config (safe in the
+      # browser; RLS governs access) — stored as repo variables, not secrets.
       - name: Deploy to Firebase Hosting (live)
         uses: FirebaseExtended/action-hosting-deploy@v0
+        env:
+          VITE_API_BASE: /api
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
