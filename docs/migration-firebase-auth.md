@@ -33,12 +33,18 @@ In the [Firebase console](https://console.firebase.google.com/project/putting-ga
 3. **Add app → iOS**, bundle id matching the Xcode target. Download
    `GoogleService-Info.plist`.
 
-## 2. Migrate the Supabase schema (0004)
+## 2. Migrate the Supabase schema (0004) — ⚠️ AT CUTOVER ONLY
 
-Apply `supabase/migrations/0004_firebase_auth.sql` — it drops the client RLS
-policies + the `set_active_putter` function, drops the `auth.users` FKs, and
-widens `user_id` from `uuid` to `text` (Firebase UIDs). Existing UUID values cast
-cleanly and stay valid.
+`supabase/migrations/0004_firebase_auth.sql` drops the client RLS policies + the
+`set_active_putter` function, drops the `auth.users` FKs, and widens `user_id`
+from `uuid` to `text` (Firebase UIDs). Existing UUID values cast cleanly and stay
+valid.
+
+> **Do not run this until the cutover (step 7).** Dropping the RLS policies breaks
+> the *currently-deployed* app, which still reads Supabase directly under RLS.
+> The new backend connects as the service role (bypassing RLS) and *requires*
+> `user_id` to be `text`, so 0004 and the new backend/frontend must go live
+> together. It's listed here for reference; apply it in step 7.
 
 Run it via the Supabase SQL editor, or `supabase db push`, or:
 ```bash
@@ -106,14 +112,22 @@ In Xcode (Swift changes already in the branch):
 
 ## 7. Cutover
 
-1. Deploy the backend: `bash backend/deploy/cloud-run.sh` (seeds the DATABASE_URL
-   secret, sets FIREBASE_PROJECT_ID, builds, deploys, sets
+Do these back-to-back (a few minutes of downtime for the old app is expected —
+steps 1–2 break it, step 3 restores it on the new version):
+
+1. **Apply migration 0004** (step 2) to Supabase.
+2. **Deploy the backend:** `bash backend/deploy/cloud-run.sh` (seeds the
+   DATABASE_URL secret, sets FIREBASE_PROJECT_ID, builds, deploys, sets
    `PROCESS_URL=.../api/process`).
-2. Merge `migrate-supabase-to-firebase` → `main`. CI builds the frontend with the
-   Firebase repo vars and deploys to Hosting.
-3. **Verify** (checklist below).
-4. In Supabase, you can now disable the Auth provider / stop relying on the anon
+3. **Merge** `migrate-supabase-to-firebase` → `main`. CI builds the frontend with
+   the Firebase repo vars and deploys to Hosting.
+4. **Verify** (checklist below).
+5. In Supabase, you can now disable the Auth provider / stop relying on the anon
    key (the app no longer uses either). The Postgres database stays.
+
+Everything in steps 1, 3, 4, 5, and 6 is safe to do **ahead of time** (they don't
+touch the live app): registering the Firebase apps, grabbing DATABASE_URL,
+setting repo vars, importing users to Firebase, and adding the iOS SDK.
 
 ## 8. Verification checklist
 
