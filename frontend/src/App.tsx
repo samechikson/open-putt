@@ -3,7 +3,7 @@ import "./App.css";
 import Dashboard from "./Dashboard";
 import AnalyzeView from "./AnalyzeView";
 import SessionDetail from "./SessionDetail";
-import Putters from "./Putters";
+import Putters from "./PuttersPage";
 import { useAuth } from "./AuthContext";
 
 // Lightweight view switching (no router): the app opens on the dashboard, from
