@@ -6,11 +6,11 @@ import Login from './Login.tsx'
 import { AuthProvider, useAuth } from './AuthContext.tsx'
 
 // Gate the whole app behind auth: render the login screen until there's a
-// session, and a brief nothing-state while the initial session check runs.
+// signed-in user, and a brief nothing-state while the initial auth check runs.
 function Root() {
-  const { session, loading } = useAuth()
+  const { user, loading } = useAuth()
   if (loading) return null
-  return session ? <App /> : <Login />
+  return user ? <App /> : <Login />
 }
 
 createRoot(document.getElementById('root')!).render(

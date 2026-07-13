@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { apiFetch } from "./api";
 import {
-  API_BASE,
   DEFAULT_CAL,
   golferSide,
   measureVideoFps,
@@ -294,7 +294,7 @@ function VideoCard({ id, file, index, onResult, onBusyChange }: VideoCardProps) 
     // displacement into a real speed (m/s) at the gate.
     fd.append("fps", String(fpsRef.current));
     try {
-      const res = await fetch(`${API_BASE}/analyze`, {
+      const res = await apiFetch("/analyze", {
         method: "POST",
         body: fd,
       });
@@ -343,7 +343,7 @@ function VideoCard({ id, file, index, onResult, onBusyChange }: VideoCardProps) 
       fd.append("center_x", String(Math.round(w / 2)));
       fd.append("search_half_width", String(Math.round(w * 0.2)));
       try {
-        const res = await fetch(`${API_BASE}/detect-ball`, {
+        const res = await apiFetch("/detect-ball", {
           method: "POST",
           body: fd,
         });

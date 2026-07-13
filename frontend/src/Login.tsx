@@ -1,7 +1,36 @@
 import { useState } from "react";
-import { supabase } from "./supabaseClient";
+import {
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+} from "firebase/auth";
+import { auth } from "./firebaseClient";
 
 type Mode = "signin" | "signup";
+
+// Map Firebase auth error codes to friendly messages (fall back to a generic).
+function authErrorMessage(err: unknown): string {
+  const code =
+    typeof err === "object" && err && "code" in err
+      ? String((err as { code: unknown }).code)
+      : "";
+  switch (code) {
+    case "auth/invalid-credential":
+    case "auth/wrong-password":
+    case "auth/user-not-found":
+      return "Incorrect email or password.";
+    case "auth/email-already-in-use":
+      return "That email is already registered. Sign in instead.";
+    case "auth/weak-password":
+      return "Password must be at least 6 characters.";
+    case "auth/invalid-email":
+      return "Enter a valid email address.";
+    case "auth/too-many-requests":
+      return "Too many attempts. Try again later.";
+    default:
+      return err instanceof Error ? err.message : "Authentication failed";
+  }
+}
 
 export default function Login() {
   const [mode, setMode] = useState<Mode>("signin");
@@ -9,7 +38,6 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Shown after sign-up when Supabase requires email confirmation.
   const [notice, setNotice] = useState<string | null>(null);
 
   const submit = async (e: React.FormEvent) => {
@@ -19,23 +47,33 @@ export default function Login() {
     setNotice(null);
     try {
       if (mode === "signup") {
-        const { data, error } = await supabase.auth.signUp({ email, password });
-        if (error) throw error;
-        // If email confirmation is on, there's no session yet — tell the user.
-        if (!data.session) {
-          setNotice("Check your email to confirm your account, then sign in.");
-          setMode("signin");
-        }
+        await createUserWithEmailAndPassword(auth, email, password);
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (error) throw error;
+        await signInWithEmailAndPassword(auth, email, password);
       }
       // On success the AuthProvider's listener swaps in the app; nothing to do.
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Authentication failed");
+      setError(authErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Send a password-reset email (needed by users migrated from Supabase, who
+  // must set a new password).
+  const resetPassword = async () => {
+    if (!email) {
+      setError("Enter your email above first, then tap Forgot password.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setNotice("Password reset email sent. Check your inbox.");
+    } catch (err: unknown) {
+      setError(authErrorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -99,6 +137,19 @@ export default function Login() {
                 : "Sign up"}
           </button>
         </form>
+
+        {mode === "signin" && (
+          <p className="text-xs text-[#888] mt-3 text-center">
+            <button
+              type="button"
+              onClick={resetPassword}
+              disabled={busy}
+              className="text-[#22c55e] hover:underline disabled:opacity-50 cursor-pointer"
+            >
+              Forgot password?
+            </button>
+          </p>
+        )}
 
         <p className="text-sm text-[#888] mt-4 text-center">
           {mode === "signin" ? "No account?" : "Already have an account?"}{" "}

@@ -1,4 +1,6 @@
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Header, Request
+from fastapi import (
+    FastAPI, File, UploadFile, Form, HTTPException, Header, Request, Depends,
+)
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
@@ -16,6 +18,7 @@ from .analyzer import (
     detect_ball_in_frame,
     check_calibration_frame,
 )
+from . import db
 from .db import (
     persist_session,
     create_pending_session,
@@ -23,7 +26,17 @@ from .db import (
     get_session_video_path,
     delete_session,
     update_session_metadata,
+    list_sessions,
+    get_session,
+    list_putts,
+    offsets_for_sessions,
+    list_putters,
+    create_putter,
+    update_putter,
+    delete_putter,
+    set_active_putter,
 )
+from .auth import require_user
 from . import cloud
 
 logger = logging.getLogger(__name__)
@@ -88,6 +101,7 @@ def health():
 @app.post("/analyze")
 async def analyze(
     video: UploadFile = File(...),
+    uid: str = Depends(require_user),
     gate_center_x: int = Form(...),
     gate_line_y: int = Form(...),
     gate_width_px: int = Form(...),
@@ -143,7 +157,7 @@ def _no_putts_message(result: dict) -> str:
 
 
 @app.post("/uploads", status_code=201)
-async def create_upload(request: Request):
+async def create_upload(request: Request, uid: str = Depends(require_user)):
     """Give the client a URL to PUT its video to directly — a signed Cloud
     Storage URL, or this backend's /local-storage endpoint in local mode. Either
     way the video bypasses the request body of the analysis call.
@@ -171,14 +185,17 @@ async def create_upload(request: Request):
 
 
 @app.post("/analyze-session", status_code=202)
-async def analyze_session_endpoint(request: Request):
+async def analyze_session_endpoint(
+    request: Request, uid: str = Depends(require_user)
+):
     """Queue analysis of a video already uploaded to storage.
 
     Body: `{session_id, object_name, gate_width_px?, gate_width_mm?, fps?}` plus
-    optional metadata (`user_id, file_name, captured_at, duration, length_feet,
-    break_type`). Creates the session row as 'queued' and starts the analysis in
-    the background (a Cloud Task, or in-process in local mode). Clients watch the
-    row via Supabase Realtime for 'done'/'error'. Returns immediately with 202.
+    optional metadata (`file_name, captured_at, duration, length_feet,
+    break_type`). The owner is the authenticated user (`uid`), not a body field.
+    Creates the session row as 'queued' and starts the analysis in the background
+    (a Cloud Task, or in-process in local mode). Clients poll the session for
+    'done'/'error'. Returns immediately with 202.
     """
     if not cloud.storage_ready():
         raise HTTPException(status_code=503, detail="Analysis backend is not configured.")
@@ -195,7 +212,7 @@ async def analyze_session_endpoint(request: Request):
         raise HTTPException(status_code=400, detail="Uploaded file not found. Upload it first.")
 
     metadata = {
-        "user_id": body.get("user_id"),
+        "user_id": uid,
         "file_name": body.get("file_name"),
         "captured_at": body.get("captured_at"),
         "ios_duration_s": body.get("duration"),
@@ -416,6 +433,7 @@ async def local_storage_get(object_path: str):
 @app.post("/detect-ball")
 async def detect_ball(
     frame: UploadFile = File(...),
+    uid: str = Depends(require_user),
     center_x: int = Form(None),
     search_half_width: int = Form(None),
 ):
@@ -428,7 +446,9 @@ async def detect_ball(
 
 
 @app.post("/calibration-check")
-async def calibration_check(frame: UploadFile = File(...)):
+async def calibration_check(
+    frame: UploadFile = File(...), uid: str = Depends(require_user)
+):
     """Pre-flight for the iOS "Capture test": given one live frame, report
     whether the laser gate and the resting ball are both visible, so the player
     can fix the scene before recording a putt they can't analyze."""
@@ -437,16 +457,49 @@ async def calibration_check(frame: UploadFile = File(...)):
     return JSONResponse(result)
 
 
-@app.get("/sessions/{session_id}/video")
-async def session_video_url(session_id: str):
-    """Return a short-lived signed URL to stream a session's retained video.
+# MARK: Session reads (ownership-scoped by the authenticated user)
 
-    The session id is an unguessable UUID and the URL expires quickly; there's
-    no ownership check (the row itself is RLS-protected in Supabase).
-    """
+
+@app.get("/sessions")
+async def sessions_list(uid: str = Depends(require_user)):
+    """All of the signed-in user's sessions, newest first."""
+    return await run_in_threadpool(list_sessions, uid)
+
+
+@app.get("/sessions/{session_id}")
+async def session_get(session_id: str, uid: str = Depends(require_user)):
+    """One session, if it belongs to the signed-in user (polled for status)."""
+    row = await run_in_threadpool(get_session, uid, session_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return row
+
+
+@app.get("/sessions/{session_id}/putts")
+async def session_putts(session_id: str, uid: str = Depends(require_user)):
+    """A session's putts, if the session belongs to the signed-in user."""
+    return await run_in_threadpool(list_putts, uid, session_id)
+
+
+@app.post("/putts/offsets")
+async def putts_offsets(request: Request, uid: str = Depends(require_user)):
+    """offset_mm for every putt across the given owned sessions (dashboard
+    summary). Body: `{session_ids: [...]}`. POST (not GET) so a large id list
+    isn't constrained by URL length."""
+    body = await request.json()
+    session_ids = body.get("session_ids") or []
+    if not isinstance(session_ids, list):
+        raise HTTPException(status_code=400, detail="session_ids must be a list.")
+    offsets = await run_in_threadpool(offsets_for_sessions, uid, session_ids)
+    return {"offsets": offsets}
+
+
+@app.get("/sessions/{session_id}/video")
+async def session_video_url(session_id: str, uid: str = Depends(require_user)):
+    """Return a short-lived signed URL to stream the user's session video."""
     if not cloud.storage_ready():
         raise HTTPException(status_code=503, detail="Video storage is not configured.")
-    video_path = await run_in_threadpool(get_session_video_path, session_id)
+    video_path = await run_in_threadpool(get_session_video_path, uid, session_id)
     if not video_path:
         raise HTTPException(status_code=404, detail="No video for this session.")
     url = await run_in_threadpool(cloud.download_url_for, video_path)
@@ -454,26 +507,23 @@ async def session_video_url(session_id: str):
 
 
 @app.delete("/sessions/{session_id}")
-async def delete_session_endpoint(session_id: str):
-    """Delete a session: its putts, the row, and the retained video. Idempotent.
-
-    No ownership check (consistent with the video endpoint): session ids are
-    unguessable UUIDs and the rows are RLS-protected in Supabase.
-    """
-    video_path = await run_in_threadpool(get_session_video_path, session_id)
+async def delete_session_endpoint(session_id: str, uid: str = Depends(require_user)):
+    """Delete the user's session: its putts, the row, and the retained video.
+    Idempotent — deleting a missing/other-owner session is a no-op."""
+    video_path = await run_in_threadpool(get_session_video_path, uid, session_id)
     if video_path:
         await run_in_threadpool(cloud.delete_object, video_path)
-    await run_in_threadpool(delete_session, session_id)
+    await run_in_threadpool(delete_session, uid, session_id)
     return JSONResponse({"status": "deleted"})
 
 
 @app.patch("/sessions/{session_id}")
-async def update_session_endpoint(session_id: str, request: Request):
-    """Update a session's editable metadata: putt distance, break type, putter.
+async def update_session_endpoint(
+    session_id: str, request: Request, uid: str = Depends(require_user)
+):
+    """Update the user's session metadata: putt distance, break type, putter.
 
     Body: `{length_feet?, break_type?, putter_id?}`. Any may be null to clear it.
-    No ownership check (consistent with the other session endpoints): ids are
-    unguessable UUIDs and the rows are RLS-protected in Supabase.
     """
     body = await request.json()
 
@@ -497,10 +547,87 @@ async def update_session_endpoint(session_id: str, request: Request):
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="putter_id must be a UUID.")
 
-    await run_in_threadpool(
-        update_session_metadata, session_id, length_feet, break_type, putter_id
+    ok = await run_in_threadpool(
+        update_session_metadata, uid, session_id, length_feet, break_type, putter_id
     )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Session not found.")
     return JSONResponse({"status": "updated"})
+
+
+# MARK: Putters (owned by the authenticated user; formerly written client-side)
+
+
+def _putter_fields(body: dict, *, require_name: bool) -> dict:
+    """Validate/coerce a putter payload. `name` is required on create."""
+    fields: dict = {}
+    if "name" in body or require_name:
+        name = (body.get("name") or "").strip()
+        if require_name and not name:
+            raise HTTPException(status_code=400, detail="name is required.")
+        if "name" in body:
+            fields["name"] = name
+    for k in ("brand", "model", "grip"):
+        if k in body:
+            v = body.get(k)
+            fields[k] = v.strip() if isinstance(v, str) else v
+    for k in ("length_in", "lie_deg"):
+        if k in body:
+            v = body.get(k)
+            if v is None or v == "":
+                fields[k] = None
+            else:
+                try:
+                    fields[k] = float(v)
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=400, detail=f"{k} must be a number.")
+    return fields
+
+
+@app.get("/putters")
+async def putters_list(uid: str = Depends(require_user)):
+    """The user's putters, active first then newest."""
+    return await run_in_threadpool(list_putters, uid)
+
+
+@app.post("/putters", status_code=201)
+async def putters_create(request: Request, uid: str = Depends(require_user)):
+    """Create a putter owned by the user."""
+    fields = _putter_fields(await request.json(), require_name=True)
+    row = await run_in_threadpool(create_putter, uid, fields)
+    if row is None:
+        raise HTTPException(status_code=503, detail="Persistence is not configured.")
+    return row  # status 201 from the decorator; FastAPI encodes UUID/datetime
+
+
+@app.patch("/putters/{putter_id}")
+async def putters_update(
+    putter_id: str, request: Request, uid: str = Depends(require_user)
+):
+    """Update the user's putter."""
+    fields = _putter_fields(await request.json(), require_name=False)
+    row = await run_in_threadpool(update_putter, uid, putter_id, fields)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Putter not found.")
+    return row
+
+
+@app.delete("/putters/{putter_id}")
+async def putters_delete(putter_id: str, uid: str = Depends(require_user)):
+    """Delete the user's putter (its sessions are un-tagged)."""
+    ok = await run_in_threadpool(delete_putter, uid, putter_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Putter not found.")
+    return JSONResponse({"status": "deleted"})
+
+
+@app.post("/putters/{putter_id}/activate")
+async def putters_activate(putter_id: str, uid: str = Depends(require_user)):
+    """Make this the user's active (default) putter."""
+    ok = await run_in_threadpool(set_active_putter, uid, putter_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Putter not found.")
+    return JSONResponse({"status": "activated"})
 
 
 # The public API is served under /api so the app can sit behind a same-origin
@@ -513,3 +640,10 @@ async def update_session_endpoint(session_id: str, request: Request):
 # start.sh).
 application = FastAPI(title="Putting Gate Analyzer (proxy root)")
 application.mount("/api", app)
+
+
+@application.on_event("shutdown")
+def _close_db_pool() -> None:
+    # Mounted sub-apps don't receive lifespan events from the parent, so close
+    # the DB connection pool here on the served app's shutdown.
+    db.close()

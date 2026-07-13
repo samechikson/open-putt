@@ -5,14 +5,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { Session, User } from "@supabase/supabase-js";
-import { supabase } from "./supabaseClient";
+import { onAuthStateChanged, signOut as fbSignOut, type User } from "firebase/auth";
+import { auth } from "./firebaseClient";
 
 interface AuthContextValue {
-  session: Session | null;
   user: User | null;
-  // True until the initial session lookup resolves, so the app can avoid
-  // flashing the login screen for an already-authenticated user.
+  // True until the initial auth state resolves, so the app can avoid flashing
+  // the login screen for an already-authenticated user.
   loading: boolean;
   signOut: () => Promise<void>;
 }
@@ -20,30 +19,23 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Restore any persisted session on load...
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
+    // Restore any persisted session and keep in sync with sign-in / sign-out /
+    // token refresh. Returns the unsubscribe function.
+    return onAuthStateChanged(auth, (u) => {
+      setUser(u);
       setLoading(false);
     });
-
-    // ...then keep in sync with sign-in / sign-out / token refresh events.
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-    });
-
-    return () => sub.subscription.unsubscribe();
   }, []);
 
   const value: AuthContextValue = {
-    session,
-    user: session?.user ?? null,
+    user,
     loading,
     signOut: async () => {
-      await supabase.auth.signOut();
+      await fbSignOut(auth);
     },
   };
 

@@ -1,8 +1,7 @@
-import { supabase } from "./supabaseClient";
+import { apiFetch, apiJson, detailFromResponse } from "./api";
 
-// A row from the `putters` table. RLS restricts reads/writes to the signed-in
-// user's own putters (auth.uid() = user_id), so the client never has to filter
-// by user. Mirror of supabase/migrations/0003_putters.sql.
+// A putter, as returned by the backend (which scopes every query to the
+// signed-in user). Mirror of backend/db/schema.sql.
 export interface PutterRow {
   id: string;
   name: string;
@@ -13,8 +12,6 @@ export interface PutterRow {
   grip: string | null;
   is_active: boolean;
 }
-
-const PUTTER_COLUMNS = "id,name,brand,model,length_in,lie_deg,grip,is_active";
 
 // The editable fields of a putter (everything except id and the active flag,
 // which is managed via setActivePutter). Nulls clear an optional field.
@@ -27,52 +24,40 @@ export interface PutterInput {
   grip: string | null;
 }
 
-// The user's putters, active one(s) first then newest. Unlike sessions, writes
-// happen client-side too (RLS permits them).
+// The user's putters, active one(s) first then newest.
 export async function fetchPutters(): Promise<PutterRow[]> {
-  const { data, error } = await supabase
-    .from("putters")
-    .select(PUTTER_COLUMNS)
-    .order("is_active", { ascending: false })
-    .order("created_at", { ascending: false });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as PutterRow[];
+  return apiJson<PutterRow[]>("/putters", {}, "Could not load putters");
 }
 
 export async function createPutter(fields: PutterInput): Promise<PutterRow> {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("You must be signed in to add a putter.");
-  const { data, error } = await supabase
-    .from("putters")
-    .insert({ ...fields, user_id: user.id })
-    .select(PUTTER_COLUMNS)
-    .single();
-  if (error) throw new Error(error.message);
-  return data as PutterRow;
+  return apiJson<PutterRow>(
+    "/putters",
+    { method: "POST", body: JSON.stringify(fields) },
+    "Could not add putter",
+  );
 }
 
 export async function updatePutter(
   id: string,
   fields: PutterInput,
 ): Promise<void> {
-  const { error } = await supabase.from("putters").update(fields).eq("id", id);
-  if (error) throw new Error(error.message);
+  await apiJson<PutterRow>(
+    `/putters/${id}`,
+    { method: "PATCH", body: JSON.stringify(fields) },
+    "Could not update putter",
+  );
 }
 
 export async function deletePutter(id: string): Promise<void> {
-  const { error } = await supabase.from("putters").delete().eq("id", id);
-  if (error) throw new Error(error.message);
+  const res = await apiFetch(`/putters/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await detailFromResponse(res, "Could not delete putter"));
 }
 
 // Make one putter the user's active (default) putter, atomically clearing any
-// previous active one (see the set_active_putter SQL function).
+// previous active one (see set_active_putter in backend/app/db.py).
 export async function setActivePutter(id: string): Promise<void> {
-  const { error } = await supabase.rpc("set_active_putter", {
-    p_putter_id: id,
-  });
-  if (error) throw new Error(error.message);
+  const res = await apiFetch(`/putters/${id}/activate`, { method: "POST" });
+  if (!res.ok) throw new Error(await detailFromResponse(res, "Could not set active putter"));
 }
 
 // A short one-line spec summary for a putter (e.g. "34\" · 70° · SuperStroke"),
