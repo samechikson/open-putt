@@ -469,10 +469,10 @@ async def delete_session_endpoint(session_id: str):
 
 @app.patch("/sessions/{session_id}")
 async def update_session_endpoint(session_id: str, request: Request):
-    """Update a session's editable metadata: putt distance and break type.
+    """Update a session's editable metadata: putt distance, break type, putter.
 
-    Body: `{length_feet?, break_type?}`. Either may be null to clear it. No
-    ownership check (consistent with the other session endpoints): ids are
+    Body: `{length_feet?, break_type?, putter_id?}`. Any may be null to clear it.
+    No ownership check (consistent with the other session endpoints): ids are
     unguessable UUIDs and the rows are RLS-protected in Supabase.
     """
     body = await request.json()
@@ -490,7 +490,14 @@ async def update_session_endpoint(session_id: str, request: Request):
     if break_type is not None and break_type not in _BREAK_TYPES:
         raise HTTPException(status_code=400, detail="Unknown break_type.")
 
+    putter_id = body.get("putter_id")
+    if putter_id is not None:
+        try:
+            putter_id = str(uuid.UUID(str(putter_id)))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="putter_id must be a UUID.")
+
     await run_in_threadpool(
-        update_session_metadata, session_id, length_feet, break_type
+        update_session_metadata, session_id, length_feet, break_type, putter_id
     )
     return JSONResponse({"status": "updated"})

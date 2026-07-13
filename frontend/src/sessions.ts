@@ -19,10 +19,11 @@ export interface SessionRow {
   status: SessionStatus;
   error: string | null;
   video_path: string | null;
+  putter_id: string | null;
 }
 
 const SESSION_COLUMNS =
-  "id,created_at,captured_at,file_name,length_feet,break_type,putt_count,duration_s,segments_detected,status,error,video_path";
+  "id,created_at,captured_at,file_name,length_feet,break_type,putt_count,duration_s,segments_detected,status,error,video_path,putter_id";
 
 // The `putt_break` enum values with human labels, in menu order (mirror of
 // supabase/migrations/0001_sessions.sql). Used for the session metadata editor
@@ -86,11 +87,15 @@ export function lengthBucketLabel(bucket: number): string {
   return `${lo}–${hi} ft`;
 }
 
-// Update a session's editable metadata (distance + break type) via the backend
-// (RLS blocks client writes). Pass null to clear a field.
+// Update a session's editable metadata (distance, break type, putter) via the
+// backend (RLS blocks client writes). Pass null to clear a field.
 export async function updateSession(
   sessionId: string,
-  metadata: { length_feet: number | null; break_type: string | null },
+  metadata: {
+    length_feet: number | null;
+    break_type: string | null;
+    putter_id: string | null;
+  },
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/sessions/${sessionId}`, {
     method: "PATCH",

@@ -3,14 +3,17 @@ import "./App.css";
 import Dashboard from "./Dashboard";
 import AnalyzeView from "./AnalyzeView";
 import SessionDetail from "./SessionDetail";
+import Putters from "./Putters";
 import { useAuth } from "./AuthContext";
 
 // Lightweight view switching (no router): the app opens on the dashboard, from
-// which you start a new session (upload/analyze) or open a saved one.
+// which you start a new session (upload/analyze), open a saved one, or manage
+// your putters.
 type View =
   | { name: "dashboard" }
   | { name: "analyze" }
-  | { name: "session"; id: string };
+  | { name: "session"; id: string }
+  | { name: "putters" };
 
 function App() {
   const { user, signOut } = useAuth();
@@ -32,6 +35,13 @@ function App() {
               <span className="text-xs text-[#888] hidden sm:inline">
                 {user.email}
               </span>
+              <button
+                type="button"
+                onClick={() => setView({ name: "putters" })}
+                className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
+              >
+                Putters
+              </button>
               <button
                 type="button"
                 onClick={signOut}
@@ -60,6 +70,9 @@ function App() {
             sessionId={view.id}
             onBack={() => setView({ name: "dashboard" })}
           />
+        )}
+        {view.name === "putters" && (
+          <Putters onBack={() => setView({ name: "dashboard" })} />
         )}
       </div>
     </div>
