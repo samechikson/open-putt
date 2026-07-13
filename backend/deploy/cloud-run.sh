@@ -24,7 +24,10 @@ BUCKET="gs://${PROJECT}-uploads"          # must be globally unique
 QUEUE="putting-gate-jobs"                 # Cloud Tasks queue
 SA_NAME="putting-gate-run"
 SA_EMAIL="${SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
-CORS_ORIGIN="https://putting-gate-app.vercel.app"
+# Frontend origin, used for the GCS bucket CORS (direct browser uploads) and the
+# backend's CORS_ALLOW_ORIGINS secret. The web app is served from Firebase
+# Hosting, which also proxies /api to this service (so API calls are same-origin).
+CORS_ORIGIN="https://putting-gate.web.app"
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/${SERVICE}"
 
 gcloud config set project "$PROJECT"
