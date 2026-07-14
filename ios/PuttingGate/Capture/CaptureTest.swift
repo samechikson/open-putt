@@ -35,8 +35,9 @@ final class CaptureTestModel: ObservableObject {
 
     /// Run a check against `url` using an already-captured JPEG `frame`. Both are
     /// gathered by the caller (the frame from the recorder) so this stays free of
-    /// capture/settings dependencies.
-    func run(url: URL?, frame: Data?) {
+    /// capture/settings dependencies. `auth` supplies the Firebase ID token the
+    /// backend requires.
+    func run(url: URL?, frame: Data?, auth: AuthManager) {
         guard let url else {
             state = .failed("No backend URL configured.")
             return
@@ -48,14 +49,17 @@ final class CaptureTestModel: ObservableObject {
         state = .checking
         Task {
             do {
-                state = .result(try await Self.postFrame(frame, to: url))
+                let token = await auth.validAccessToken()
+                state = .result(try await Self.postFrame(frame, to: url, token: token))
             } catch {
                 state = .failed("Couldn't reach the analyzer. Check your connection and try again.")
             }
         }
     }
 
-    private static func postFrame(_ jpeg: Data, to url: URL) async throws -> CalibrationVerdict {
+    private static func postFrame(
+        _ jpeg: Data, to url: URL, token: String?
+    ) async throws -> CalibrationVerdict {
         let boundary = "Boundary-\(UUID().uuidString)"
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -63,6 +67,9 @@ final class CaptureTestModel: ObservableObject {
             "multipart/form-data; boundary=\(boundary)",
             forHTTPHeaderField: "Content-Type"
         )
+        if let token {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
 
         var body = Data()
         body.append("--\(boundary)\r\n")

@@ -3,6 +3,7 @@ import SwiftUI
 struct RecordView: View {
     @EnvironmentObject private var recorder: CameraRecorder
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var auth: AuthManager
     @StateObject private var captureTest = CaptureTestModel()
 
     @State private var lengthFeet = 9
@@ -75,7 +76,8 @@ struct RecordView: View {
         Button {
             captureTest.run(
                 url: settings.calibrationCheckURL,
-                frame: recorder.captureTestFrame()
+                frame: recorder.captureTestFrame(),
+                auth: auth
             )
         } label: {
             Label("Capture test", systemImage: "checkmark.seal")
