@@ -609,7 +609,10 @@ export default function SessionDetail({
                               : `${Math.abs(p.offset_mm).toFixed(1)} mm`}
                           </td>
                           <td className="px-4 py-3 text-[#aaa] capitalize">
-                            {p.direction ?? "—"}
+                            {/* Report the golfer's left/right, not the raw
+                                image-space `direction` (clips are filmed face-on,
+                                which mirrors it). Matches the session bias above. */}
+                            {p.offset_mm == null ? "—" : golferSide(p.offset_mm)}
                           </td>
                           <td className="px-4 py-3 text-[#aaa]">
                             {p.speed_mps == null
