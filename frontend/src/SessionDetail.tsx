@@ -4,6 +4,7 @@ import {
   fetchPutts,
   fetchSessionVideoUrl,
   deleteSession,
+  reanalyzeSession,
   updateSession,
   subscribeToSession,
   breakTypeLabel,
@@ -31,6 +32,10 @@ export default function SessionDetail({
   const [putters, setPutters] = useState<PutterRow[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  // Bumped after a re-analysis so the load-and-subscribe effect re-runs: the
+  // original subscription stops polling once a session is terminal, so a fresh
+  // one is needed to watch the re-run through to done/error.
+  const [reloadKey, setReloadKey] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   // When playing a single putt, pause once its segment ends.
   const puttEndRef = useRef<number | null>(null);
@@ -112,7 +117,7 @@ export default function SessionDetail({
       cancelled = true;
       unsubscribe();
     };
-  }, [sessionId]);
+  }, [sessionId, reloadKey]);
 
   // The user's putters, for tagging this session (and resolving its putter name).
   useEffect(() => {
@@ -196,6 +201,33 @@ export default function SessionDetail({
     }
   };
 
+  const [reanalyzing, setReanalyzing] = useState(false);
+  const handleReanalyze = async () => {
+    // A 'done' session has results this will replace; confirm before discarding.
+    if (
+      status === "done" &&
+      !window.confirm(
+        "Re-analyze this session? Its current putts will be replaced by the new results.",
+      )
+    )
+      return;
+    setReanalyzing(true);
+    setLoadError(null);
+    try {
+      await reanalyzeSession(sessionId);
+      // Reflect the reset immediately, then re-subscribe to watch it complete.
+      setPutts([]);
+      setSession((prev) =>
+        prev ? { ...prev, status: "queued", error: null } : prev,
+      );
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "Could not start re-analysis");
+    } finally {
+      setReanalyzing(false);
+    }
+  };
+
   const [deleting, setDeleting] = useState(false);
   const handleDelete = async () => {
     if (
@@ -221,6 +253,16 @@ export default function SessionDetail({
           {session?.file_name ?? "Session"}
         </h2>
         <div className="flex items-center gap-2 shrink-0">
+          {session && session.video_path && !pending && (
+            <button
+              type="button"
+              onClick={handleReanalyze}
+              disabled={reanalyzing}
+              className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] disabled:opacity-50 rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
+            >
+              {reanalyzing ? "Starting…" : "Re-analyze"}
+            </button>
+          )}
           {session && (
             <button
               type="button"

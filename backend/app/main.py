@@ -22,6 +22,7 @@ from . import db
 from .db import (
     persist_session,
     create_pending_session,
+    begin_reanalysis,
     set_session_status,
     get_session_video_path,
     delete_session,
@@ -262,6 +263,72 @@ async def analyze_session_endpoint(
     )
 
 
+@app.post("/sessions/{session_id}/reanalyze", status_code=202)
+async def reanalyze_session_endpoint(
+    session_id: str, uid: str = Depends(require_user)
+):
+    """Re-run analysis on a session's already-retained video, on demand.
+
+    Reprocesses the same clip (e.g. after an analyzer improvement) without a
+    re-upload: resets the row to 'queued', clears its prior putts, and runs the
+    same pipeline against the retained `sessions/` object — which is left in
+    place, since it's the only copy. Returns 202; clients poll the session for
+    'done'/'error' exactly as they do after the initial upload.
+    """
+    if not cloud.storage_ready():
+        raise HTTPException(status_code=503, detail="Analysis backend is not configured.")
+
+    # Resets the row to 'queued' + clears putts, and returns the retained video
+    # path, fps, and metadata to re-run with. None ⇒ not found / not owned / no
+    # retained video to re-analyze.
+    info = await run_in_threadpool(begin_reanalysis, uid, session_id)
+    if info is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found, or it has no saved video to re-analyze.",
+        )
+
+    object_name = info["video_path"]
+    metadata = info["metadata"]
+    fps = float(info.get("fps") or 0.0)
+
+    if not await run_in_threadpool(cloud.object_exists, object_name):
+        message = "The saved video is no longer available to re-analyze."
+        await _record_error(session_id, object_name, message, already_retained=True)
+        raise HTTPException(status_code=409, detail=message)
+
+    if cloud.is_local():
+        asyncio.create_task(
+            _run_local_job(
+                session_id, object_name, metadata, 0, 0.0, fps, already_retained=True
+            )
+        )
+    else:
+        try:
+            await run_in_threadpool(
+                cloud.enqueue_process_task,
+                {
+                    "session_id": session_id,
+                    "object_name": object_name,
+                    "gate_width_px": 0,
+                    "gate_width_mm": 0.0,
+                    "fps": fps,
+                    "metadata": metadata,
+                    "already_retained": True,
+                },
+            )
+        except Exception:  # noqa: BLE001
+            await _record_error(
+                session_id, object_name, "Could not start analysis.", already_retained=True
+            )
+            logger.exception("Failed to enqueue reanalysis for session %s", session_id)
+            raise HTTPException(status_code=503, detail="Could not queue analysis. Try again.")
+
+    return JSONResponse(
+        {"session_id": session_id, "status": "queued"}, status_code=202
+    )
+
+
 async def _retain_video(object_name: str) -> str:
     """Copy the transient `uploads/` clip to the retained `sessions/` prefix
     (kept for playback/review) and return the retained object path. The caller
@@ -271,17 +338,30 @@ async def _retain_video(object_name: str) -> str:
     return retained
 
 
-async def _record_error(session_id: str, object_name: str, message: str) -> None:
+async def _record_error(
+    session_id: str,
+    object_name: str,
+    message: str,
+    already_retained: bool = False,
+) -> None:
     """Terminal failure: retain the video for review, record the message and the
     retained video path on the row, then drop the transient upload.
 
     Every recorded clip is kept in `sessions/` regardless of the analysis
     outcome, so no putt a player captured is ever lost to a calibration miss,
     a no-putt clip, or an unexpected failure.
+
+    On a re-analysis the video is already in `sessions/` (``already_retained``);
+    it's both the source and the retained copy, so we neither re-copy nor delete
+    it — that would destroy the only clip.
     """
-    retained = await _retain_video(object_name)
+    if already_retained:
+        retained = object_name
+    else:
+        retained = await _retain_video(object_name)
     await run_in_threadpool(set_session_status, session_id, "error", message, retained)
-    await run_in_threadpool(cloud.delete_object, object_name)
+    if not already_retained:
+        await run_in_threadpool(cloud.delete_object, object_name)
 
 
 async def _process_session(
@@ -291,12 +371,17 @@ async def _process_session(
     gate_width_px: int,
     gate_width_mm: float,
     fps: float,
+    already_retained: bool = False,
 ) -> None:
     """Analyze one queued session and drive its row to done/error.
 
     Domain failures (calibration / no putts / bad video) are recorded on the row
     and return normally. Unexpected/infra errors propagate so the caller can
     decide whether to retry.
+
+    ``already_retained`` marks a re-analysis whose source is the retained
+    `sessions/` clip rather than a fresh `uploads/` object: the video stays where
+    it is (no copy, no delete of the source) so the only clip is preserved.
     """
     tmp_path: Optional[str] = None
     try:
@@ -312,23 +397,27 @@ async def _process_session(
                 fps=fps or None,
             )
         except CalibrationError as exc:
-            await _record_error(session_id, object_name, str(exc))
+            await _record_error(session_id, object_name, str(exc), already_retained)
             return
 
         if "error" in result:
-            await _record_error(session_id, object_name, result["error"])
+            await _record_error(session_id, object_name, result["error"], already_retained)
             return
         if not result.get("putts"):
-            await _record_error(session_id, object_name, _no_putts_message(result))
+            await _record_error(
+                session_id, object_name, _no_putts_message(result), already_retained
+            )
             return
 
         # Retain the video for playback: copy it to the 90-day `sessions/` prefix
-        # and record the path, then drop the transient `uploads/` copy.
-        retained = await _retain_video(object_name)
+        # and record the path, then drop the transient `uploads/` copy. On a
+        # re-analysis the clip is already retained, so keep it in place.
+        retained = object_name if already_retained else await _retain_video(object_name)
         await run_in_threadpool(
             persist_session, session_id, {**metadata, "video_path": retained}, result
         )
-        await run_in_threadpool(cloud.delete_object, object_name)
+        if not already_retained:
+            await run_in_threadpool(cloud.delete_object, object_name)
     finally:
         if tmp_path:
             try:
@@ -340,14 +429,20 @@ async def _process_session(
 async def _run_local_job(
     session_id: str, object_name: str, metadata: dict,
     gate_width_px: int, gate_width_mm: float, fps: float,
+    already_retained: bool = False,
 ) -> None:
     """In-process worker for local mode; records an error on unexpected failure."""
     try:
-        await _process_session(session_id, object_name, metadata, gate_width_px, gate_width_mm, fps)
+        await _process_session(
+            session_id, object_name, metadata,
+            gate_width_px, gate_width_mm, fps, already_retained,
+        )
     except Exception:  # noqa: BLE001
         logger.exception("Local job %s failed", session_id)
         try:
-            await _record_error(session_id, object_name, "Analysis failed unexpectedly.")
+            await _record_error(
+                session_id, object_name, "Analysis failed unexpectedly.", already_retained
+            )
         except Exception:  # noqa: BLE001
             logger.exception("Could not mark session %s as failed", session_id)
 
@@ -371,6 +466,7 @@ async def process_session(
     payload = await request.json()
     session_id = payload["session_id"]
     object_name = payload["object_name"]
+    already_retained = bool(payload.get("already_retained"))
     retry_count = int(request.headers.get("X-CloudTasks-TaskRetryCount", "0"))
 
     try:
@@ -381,6 +477,7 @@ async def process_session(
             int(payload.get("gate_width_px") or 0),
             float(payload.get("gate_width_mm") or 0.0),
             float(payload.get("fps") or 0.0),
+            already_retained,
         )
         return JSONResponse({"status": "processed"})
     except Exception:  # noqa: BLE001 — unexpected/infra error
@@ -391,7 +488,9 @@ async def process_session(
         if retry_count >= max_retries:
             # Out of retries: record the failure and stop (200 → no more retries).
             try:
-                await _record_error(session_id, object_name, "Analysis failed unexpectedly.")
+                await _record_error(
+                    session_id, object_name, "Analysis failed unexpectedly.", already_retained
+                )
             except Exception:  # noqa: BLE001
                 logger.exception("Cleanup after failure of %s failed", session_id)
             return JSONResponse({"status": "error"})

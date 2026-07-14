@@ -364,6 +364,50 @@ def get_session_video_path(uid: str, session_id: str) -> Optional[str]:
         return row["video_path"] if row else None
 
 
+def begin_reanalysis(uid: str, session_id: str) -> Optional[dict[str, Any]]:
+    """Reset an owned session to 'queued' for a fresh analysis of its retained
+    video, clearing its prior putts, and return what the re-run needs.
+
+    Returns ``{video_path, fps, metadata}`` (the metadata shape ``persist_session``
+    expects, carrying the current file_name / captured_at / duration / length /
+    break so re-analysis doesn't null the user's edits), or None when the session
+    doesn't exist, isn't owned by ``uid``, has no retained video, or persistence
+    is disabled. The status reset and putt-clear happen in one transaction so the
+    row never sits half-reset.
+    """
+    pool = _get_pool()
+    if pool is None:
+        return None
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "select video_path, fps, file_name, captured_at, ios_duration_s, "
+            "length_feet, break_type from sessions "
+            "where id = %s::uuid and user_id = %s",
+            (session_id, uid),
+        )
+        row = cur.fetchone()
+        if row is None or not row.get("video_path"):
+            return None
+        cur.execute(
+            "update sessions set status = 'queued', error = null, putt_count = 0 "
+            "where id = %s::uuid and user_id = %s",
+            (session_id, uid),
+        )
+        cur.execute("delete from putts where session_id = %s::uuid", (session_id,))
+    return {
+        "video_path": row["video_path"],
+        "fps": row.get("fps"),
+        "metadata": {
+            "user_id": uid,
+            "file_name": row.get("file_name"),
+            "captured_at": row.get("captured_at"),
+            "ios_duration_s": row.get("ios_duration_s"),
+            "length_feet": row.get("length_feet"),
+            "break_type": row.get("break_type"),
+        },
+    }
+
+
 def delete_session(uid: str, session_id: str) -> bool:
     """Delete a user's session (putts cascade). Returns True if a row was
     deleted. Idempotent; no-op when persistence is disabled."""

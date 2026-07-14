@@ -103,6 +103,18 @@ export async function updateSession(
   }
 }
 
+// Re-run analysis on a session's already-uploaded video, on demand. Resets the
+// session to 'queued' server-side and reprocesses the retained clip (no
+// re-upload); watch it via subscribeToSession for completion, as with an upload.
+export async function reanalyzeSession(sessionId: string): Promise<void> {
+  const res = await apiFetch(`/sessions/${sessionId}/reanalyze`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    throw new Error(await detailFromResponse(res, "Could not start re-analysis"));
+  }
+}
+
 // Delete a session and its putts + video via the backend.
 export async function deleteSession(sessionId: string): Promise<void> {
   const res = await apiFetch(`/sessions/${sessionId}`, { method: "DELETE" });
