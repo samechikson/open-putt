@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import "./App.css";
 import Dashboard from "./Dashboard";
 import AnalyzeView from "./AnalyzeView";
@@ -6,18 +6,21 @@ import SessionDetail from "./SessionDetail";
 import Putters from "./PuttersPage";
 import { useAuth } from "./AuthContext";
 
-// Lightweight view switching (no router): the app opens on the dashboard, from
-// which you start a new session (upload/analyze), open a saved one, or manage
-// your putters.
-type View =
-  | { name: "dashboard" }
-  | { name: "analyze" }
-  | { name: "session"; id: string }
-  | { name: "putters" };
+// Each screen has its own route (see the paths below). Navigation goes through
+// the URL/browser history via `useNavigate`; the page components keep their
+// existing callback props, which we wire to `navigate(...)` here so they stay
+// decoupled from the router.
+
+// Reads the :id route param and renders the session page.
+function SessionDetailRoute() {
+  const navigate = useNavigate();
+  const { id } = useParams();
+  return <SessionDetail sessionId={id!} onBack={() => navigate("/")} />;
+}
 
 function App() {
   const { user, signOut } = useAuth();
-  const [view, setView] = useState<View>({ name: "dashboard" });
+  const navigate = useNavigate();
 
   return (
     <div className="min-h-screen bg-[#0d0d0d] text-[#d0d0d0] px-4 py-8">
@@ -25,7 +28,7 @@ function App() {
         <div className="flex items-center justify-between gap-4 mb-8">
           <button
             type="button"
-            onClick={() => setView({ name: "dashboard" })}
+            onClick={() => navigate("/")}
             className="text-left cursor-pointer"
           >
             <h1 className="text-2xl font-bold text-white">Putting Gate</h1>
@@ -37,7 +40,7 @@ function App() {
               </span>
               <button
                 type="button"
-                onClick={() => setView({ name: "putters" })}
+                onClick={() => navigate("/putters")}
                 className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
               >
                 Putters
@@ -53,27 +56,32 @@ function App() {
           )}
         </div>
 
-        {view.name === "dashboard" && (
-          <Dashboard
-            onNewSession={() => setView({ name: "analyze" })}
-            onOpenSession={(id) => setView({ name: "session", id })}
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <Dashboard
+                onNewSession={() => navigate("/analyze")}
+                onOpenSession={(id) => navigate(`/sessions/${id}`)}
+              />
+            }
           />
-        )}
-        {view.name === "analyze" && (
-          <AnalyzeView
-            onBack={() => setView({ name: "dashboard" })}
-            onSessionCreated={(id) => setView({ name: "session", id })}
+          <Route
+            path="/analyze"
+            element={
+              <AnalyzeView
+                onBack={() => navigate("/")}
+                onSessionCreated={(id) => navigate(`/sessions/${id}`)}
+              />
+            }
           />
-        )}
-        {view.name === "session" && (
-          <SessionDetail
-            sessionId={view.id}
-            onBack={() => setView({ name: "dashboard" })}
+          <Route path="/sessions/:id" element={<SessionDetailRoute />} />
+          <Route
+            path="/putters"
+            element={<Putters onBack={() => navigate("/")} />}
           />
-        )}
-        {view.name === "putters" && (
-          <Putters onBack={() => setView({ name: "dashboard" })} />
-        )}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
       </div>
     </div>
   );
