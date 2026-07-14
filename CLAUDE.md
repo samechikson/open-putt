@@ -5,9 +5,9 @@ Guidance for AI assistants working in this repository.
 ## What this is
 
 **Putting Gate** is a golf putting-analysis app. A player films a putt rolling
-through a physical "laser gate" (two laser dots defining a line the ball crosses);
-the app measures how far off-center the ball crossed and reports a push/pull bias,
-speed, and direction. It has three clients over one shared backend:
+through a physical "laser gate" (laser dot defining where the ball crosses);
+the app measures how far off-center the ball crossed and reports a push/pull bias and 
+speed. It has two clients over one shared backend:
 
 - **`backend/`** — Python / FastAPI service. Does the computer-vision analysis
   (OpenCV) and is the **sole database client** and the **sole storage/auth broker**.
