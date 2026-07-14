@@ -424,13 +424,18 @@ def begin_reanalysis(uid: str, session_id: str) -> Optional[dict[str, Any]]:
             (session_id, uid),
         )
         cur.execute("delete from putts where session_id = %s::uuid", (session_id,))
+    # captured_at comes back from the DB as a datetime; the metadata dict is JSON-
+    # serialized into the Cloud Tasks payload, so hand it back as an ISO string
+    # (matching the upload path, where captured_at arrives as a string). Postgres
+    # parses it fine on re-persist.
+    captured_at = row.get("captured_at")
     return {
         "video_path": row["video_path"],
         "fps": row.get("fps"),
         "metadata": {
             "user_id": uid,
             "file_name": row.get("file_name"),
-            "captured_at": row.get("captured_at"),
+            "captured_at": captured_at.isoformat() if captured_at is not None else None,
             "ios_duration_s": row.get("ios_duration_s"),
             "length_feet": row.get("length_feet"),
             "break_type": row.get("break_type"),
