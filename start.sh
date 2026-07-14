@@ -13,11 +13,15 @@ export LOCAL_MODE=1
 export AUTH_DEV_UID="${AUTH_DEV_UID:-local-dev-user}"
 
 # Database: point at a Postgres to exercise persistence + the sessions/putters
-# endpoints. Use a local Postgres (createdb putting_gate && psql putting_gate -f
-# backend/db/schema.sql), or set DATABASE_URL to the Supabase pooler connection
-# string to hit the real data. If unset, the backend fails soft (analysis works,
-# but DB-backed reads/writes no-op).
-export DATABASE_URL="${DATABASE_URL:-postgresql://localhost/putting_gate}"
+# endpoints. Precedence is shell DATABASE_URL, then backend/.env (loaded by the
+# app via load_dotenv), then a local Postgres fallback (createdb putting_gate &&
+# psql putting_gate -f backend/db/schema.sql). Only export the fallback when
+# neither source provides a URL — exporting it unconditionally would shadow the
+# one in backend/.env, since load_dotenv() does not override an already-set env
+# var, and the pool would then time out against a Postgres that isn't running.
+if [ -z "$DATABASE_URL" ] && ! grep -qs '^DATABASE_URL=' backend/.env; then
+  export DATABASE_URL="postgresql://localhost/putting_gate"
+fi
 
 # Backend
 cd backend
