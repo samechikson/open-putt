@@ -126,6 +126,7 @@ create table if not exists putts (
   track_count  int,
   crossing_x   double precision,                 -- from crossing_pos[0]
   crossing_y   double precision,                 -- from crossing_pos[1]
+  crossing_frame int,                            -- source-frame index at the gate crossing
   unique (session_id, putt_index)
 );
 

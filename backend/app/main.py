@@ -3,13 +3,14 @@ from fastapi import (
 )
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, Response
 import logging
 import tempfile
 import os
 import uuid
 import hmac
 import asyncio
+import cv2
 from typing import Optional
 from .analyzer import (
     CalibrationError,
@@ -17,6 +18,7 @@ from .analyzer import (
     analyze_session,
     detect_ball_in_frame,
     check_calibration_frame,
+    _read_frame_at,
 )
 from . import db
 from .db import (
@@ -25,6 +27,7 @@ from .db import (
     begin_reanalysis,
     set_session_status,
     get_session_video_path,
+    get_putt_crossing_frame,
     delete_session,
     update_session_metadata,
     list_sessions,
@@ -603,6 +606,44 @@ async def session_video_url(session_id: str, uid: str = Depends(require_user)):
         raise HTTPException(status_code=404, detail="No video for this session.")
     url = await run_in_threadpool(cloud.download_url_for, video_path)
     return JSONResponse({"url": url})
+
+
+@app.get("/sessions/{session_id}/putts/{putt_index}/frame")
+async def putt_crossing_frame(
+    session_id: str, putt_index: int, uid: str = Depends(require_user)
+):
+    """Serve a JPEG still of the frame where the putt crossed the gate (the
+    bottom laser line). 404 when the session has no video, or when the putt has
+    no stored crossing frame (legacy putts analyzed before this was recorded).
+
+    Note: seeking is keyframe-granular on iPhone .mov, so the still may land a
+    few frames off — fine for a "at the gate" image."""
+    if not cloud.storage_ready():
+        raise HTTPException(status_code=503, detail="Video storage is not configured.")
+    video_path = await run_in_threadpool(get_session_video_path, uid, session_id)
+    if not video_path:
+        raise HTTPException(status_code=404, detail="No video for this session.")
+    frame_idx = await run_in_threadpool(
+        get_putt_crossing_frame, uid, session_id, putt_index
+    )
+    if frame_idx is None:
+        raise HTTPException(status_code=404, detail="No crossing frame for this putt.")
+
+    def _render() -> Optional[bytes]:
+        tmp_path = cloud.download_to_temp(video_path)
+        try:
+            frame = _read_frame_at(tmp_path, frame_idx)
+            if frame is None:
+                return None
+            ok, buf = cv2.imencode(".jpg", frame)
+            return buf.tobytes() if ok else None
+        finally:
+            os.unlink(tmp_path)
+
+    jpeg = await run_in_threadpool(_render)
+    if jpeg is None:
+        raise HTTPException(status_code=404, detail="Could not read the crossing frame.")
+    return Response(content=jpeg, media_type="image/jpeg")
 
 
 @app.delete("/sessions/{session_id}")

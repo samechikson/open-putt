@@ -3,6 +3,7 @@ import {
   fetchSession,
   fetchPutts,
   fetchSessionVideoUrl,
+  fetchPuttFrameUrl,
   deleteSession,
   reanalyzeSession,
   updateSession,
@@ -40,6 +41,59 @@ export default function SessionDetail({
   // When playing a single putt, pause once its segment ends.
   const puttEndRef = useRef<number | null>(null);
 
+  // The putt whose gate-crossing still is shown in the side panel, and the
+  // fetched still itself (an object URL we must revoke when it changes).
+  const [selectedPutt, setSelectedPutt] = useState<PuttRow | null>(null);
+  const [frameUrl, setFrameUrl] = useState<string | null>(null);
+  const [frameLoading, setFrameLoading] = useState(false);
+  const [frameError, setFrameError] = useState<string | null>(null);
+  const frameUrlRef = useRef<string | null>(null);
+  // Bumped on every selection so a slow in-flight fetch for a previous putt
+  // can't overwrite the current one.
+  const frameReqRef = useRef(0);
+
+  const setFrame = (url: string | null) => {
+    if (frameUrlRef.current) URL.revokeObjectURL(frameUrlRef.current);
+    frameUrlRef.current = url;
+    setFrameUrl(url);
+  };
+
+  // Select a putt and load its gate-crossing still. Legacy putts (no stored
+  // crossing frame) get no still — just the selection, no fetch, no error.
+  const selectPutt = (p: PuttRow) => {
+    setSelectedPutt(p);
+    const req = ++frameReqRef.current;
+    setFrame(null);
+    setFrameError(null);
+    if (p.crossing_frame == null) {
+      setFrameLoading(false);
+      return;
+    }
+    setFrameLoading(true);
+    fetchPuttFrameUrl(sessionId, p.putt_index)
+      .then((url) => {
+        if (req !== frameReqRef.current) {
+          URL.revokeObjectURL(url); // superseded by a later selection
+          return;
+        }
+        setFrame(url);
+        setFrameLoading(false);
+      })
+      .catch((e: unknown) => {
+        if (req !== frameReqRef.current) return;
+        setFrameError(e instanceof Error ? e.message : "Could not load frame");
+        setFrameLoading(false);
+      });
+  };
+
+  // Release the last object URL on unmount.
+  useEffect(
+    () => () => {
+      if (frameUrlRef.current) URL.revokeObjectURL(frameUrlRef.current);
+    },
+    [],
+  );
+
   // Jump the player to a putt and play just its segment.
   const playPutt = (p: PuttRow) => {
     const video = videoRef.current;
@@ -47,6 +101,12 @@ export default function SessionDetail({
     puttEndRef.current = p.end_s ?? null;
     video.currentTime = p.start_s;
     void video.play();
+  };
+
+  // Clicking a putt row: show its crossing still and jump the video to it.
+  const handlePuttClick = (p: PuttRow) => {
+    selectPutt(p);
+    playPutt(p);
   };
 
   const handleTimeUpdate = () => {
@@ -217,6 +277,9 @@ export default function SessionDetail({
       await reanalyzeSession(sessionId);
       // Reflect the reset immediately, then re-subscribe to watch it complete.
       setPutts([]);
+      setSelectedPutt(null);
+      setFrame(null);
+      setFrameError(null);
       setSession((prev) =>
         prev ? { ...prev, status: "queued", error: null } : prev,
       );
@@ -512,46 +575,87 @@ export default function SessionDetail({
           </div>
 
           {putts.length > 0 && (
-            <div className="bg-[#1a1a1a] border border-[#333] rounded-xl overflow-x-auto">
-              <table className="w-full text-sm min-w-[20rem]">
-                <thead>
-                  <tr className="text-left text-xs uppercase tracking-widest text-[#888] border-b border-[#333]">
-                    <th className="px-4 py-3 font-semibold">#</th>
-                    <th className="px-4 py-3 font-semibold">Offset</th>
-                    <th className="px-4 py-3 font-semibold">Direction</th>
-                    <th className="px-4 py-3 font-semibold">Speed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {putts.map((p) => (
-                    <tr
-                      key={p.putt_index}
-                      onClick={videoUrl ? () => playPutt(p) : undefined}
-                      className={`border-b border-[#262626] last:border-0 ${
-                        videoUrl ? "cursor-pointer hover:bg-[#222]" : ""
-                      }`}
-                    >
-                      <td className="px-4 py-3 text-[#aaa]">
-                        {videoUrl && <span className="text-[#22c55e] mr-1">▶</span>}
-                        {p.putt_index + 1}
-                      </td>
-                      <td className="px-4 py-3 text-white">
-                        {p.offset_mm == null
-                          ? "—"
-                          : `${Math.abs(p.offset_mm).toFixed(1)} mm`}
-                      </td>
-                      <td className="px-4 py-3 text-[#aaa] capitalize">
-                        {p.direction ?? "—"}
-                      </td>
-                      <td className="px-4 py-3 text-[#aaa]">
-                        {p.speed_mps == null
-                          ? "—"
-                          : `${p.speed_mps.toFixed(2)} m/s`}
-                      </td>
+            <div className="flex flex-col lg:flex-row gap-6">
+              <div className="flex-1 min-w-0 bg-[#1a1a1a] border border-[#333] rounded-xl overflow-x-auto">
+                <table className="w-full text-sm min-w-[20rem]">
+                  <thead>
+                    <tr className="text-left text-xs uppercase tracking-widest text-[#888] border-b border-[#333]">
+                      <th className="px-4 py-3 font-semibold">#</th>
+                      <th className="px-4 py-3 font-semibold">Offset</th>
+                      <th className="px-4 py-3 font-semibold">Direction</th>
+                      <th className="px-4 py-3 font-semibold">Speed</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {putts.map((p) => {
+                      const selected = p.putt_index === selectedPutt?.putt_index;
+                      return (
+                        <tr
+                          key={p.putt_index}
+                          onClick={() => handlePuttClick(p)}
+                          className={`border-b border-[#262626] last:border-0 cursor-pointer hover:bg-[#222] ${
+                            selected ? "bg-[#222]" : ""
+                          }`}
+                        >
+                          <td className="px-4 py-3 text-[#aaa]">
+                            {videoUrl && (
+                              <span className="text-[#22c55e] mr-1">▶</span>
+                            )}
+                            {p.putt_index + 1}
+                          </td>
+                          <td className="px-4 py-3 text-white">
+                            {p.offset_mm == null
+                              ? "—"
+                              : `${Math.abs(p.offset_mm).toFixed(1)} mm`}
+                          </td>
+                          <td className="px-4 py-3 text-[#aaa] capitalize">
+                            {p.direction ?? "—"}
+                          </td>
+                          <td className="px-4 py-3 text-[#aaa]">
+                            {p.speed_mps == null
+                              ? "—"
+                              : `${p.speed_mps.toFixed(2)} m/s`}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="lg:w-80 shrink-0 bg-[#1a1a1a] border border-[#333] rounded-xl p-4">
+                <h3 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-3">
+                  Crossing frame
+                </h3>
+                {selectedPutt == null ? (
+                  <p className="text-sm text-[#666]">
+                    Select a putt to see where it crossed the gate.
+                  </p>
+                ) : frameLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-[#888]">
+                    <span className="w-3.5 h-3.5 border-2 border-[#22c55e] border-t-transparent rounded-full animate-spin" />
+                    Loading frame…
+                  </div>
+                ) : frameUrl ? (
+                  <div>
+                    <img
+                      src={frameUrl}
+                      alt={`Putt ${selectedPutt.putt_index + 1} crossing the gate`}
+                      className="w-full rounded-lg bg-black"
+                    />
+                    <p className="text-xs text-[#666] mt-2">
+                      Putt {selectedPutt.putt_index + 1} · at the gate line
+                    </p>
+                  </div>
+                ) : frameError ? (
+                  <p className="text-sm text-[#f87171]">{frameError}</p>
+                ) : (
+                  // Legacy putt with no stored crossing frame: show nothing.
+                  <p className="text-sm text-[#666]">
+                    Select a putt to see where it crossed the gate.
+                  </p>
+                )}
+              </div>
             </div>
           )}
         </>

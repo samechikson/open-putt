@@ -237,6 +237,9 @@ export interface PuttRow {
   direction: string | null;
   speed_mps: number | null;
   track_count: number | null;
+  // Source-frame index where the ball crossed the gate (bottom laser). Null for
+  // putts analyzed before this was recorded — no crossing still is available.
+  crossing_frame: number | null;
 }
 
 export async function fetchPutts(sessionId: string): Promise<PuttRow[]> {
@@ -245,6 +248,21 @@ export async function fetchPutts(sessionId: string): Promise<PuttRow[]> {
     {},
     "Could not load putts",
   );
+}
+
+// Fetch the gate-crossing still for a putt as an object URL. The frame endpoint
+// needs the Bearer token (so a bare <img src> can't hit it directly); we fetch
+// the JPEG as a blob and wrap it in an object URL. Callers must revoke the URL
+// when done (URL.revokeObjectURL) to avoid leaks.
+export async function fetchPuttFrameUrl(
+  sessionId: string,
+  puttIndex: number,
+): Promise<string> {
+  const res = await apiFetch(`/sessions/${sessionId}/putts/${puttIndex}/frame`);
+  if (!res.ok) {
+    throw new Error(await detailFromResponse(res, "Could not load frame"));
+  }
+  return URL.createObjectURL(await res.blob());
 }
 
 // Pull every putt's offset_mm across several sessions in one request, for the

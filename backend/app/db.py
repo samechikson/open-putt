@@ -20,11 +20,18 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any, Optional
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# Env precedence: real shell env > backend/.env.local > backend/.env. load_dotenv
+# never overrides an already-set var, so loading .env.local first lets it win
+# over .env for local-dev overrides while the shell still wins over both. Paths
+# are anchored to the backend dir so it works regardless of the process cwd.
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(_BACKEND_DIR / ".env.local")  # local-dev overrides, if present
+load_dotenv(_BACKEND_DIR / ".env")        # shared defaults
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +46,8 @@ _SESSION_COLS = (
     "putter_id"
 )
 _PUTT_COLS = (
-    "putt_index, start_s, end_s, offset_mm, direction, speed_mps, track_count"
+    "putt_index, start_s, end_s, offset_mm, direction, speed_mps, track_count, "
+    "crossing_frame"
 )
 _PUTTER_COLS = (
     "id, name, brand, model, length_in, lie_deg, grip, is_active"
@@ -263,10 +271,10 @@ def persist_session(
                 insert into putts
                   (session_id, putt_index, start_frame, end_frame, start_s,
                    end_s, offset_px, offset_mm, direction, speed_mps,
-                   track_count, crossing_x, crossing_y)
+                   track_count, crossing_x, crossing_y, crossing_frame)
                 values
                   (%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s::putt_direction, %s,
-                   %s, %s, %s)
+                   %s, %s, %s, %s)
                 """,
                 (
                     session_id,
@@ -282,6 +290,7 @@ def persist_session(
                     p.get("track_count"),
                     crossing[0] if crossing else None,
                     crossing[1] if crossing else None,
+                    p.get("crossing_frame"),
                 ),
             )
     return session_id
@@ -331,6 +340,27 @@ def list_putts(uid: str, session_id: str) -> list[dict[str, Any]]:
             (session_id, uid),
         )
         return cur.fetchall()
+
+
+def get_putt_crossing_frame(
+    uid: str, session_id: str, putt_index: int
+) -> Optional[int]:
+    """The gate-crossing frame index for one putt, if the session belongs to
+    `uid`. Returns None when the putt doesn't exist or predates crossing_frame
+    (legacy row) — callers treat both as "no still available"."""
+    pool = _get_pool()
+    if pool is None:
+        return None
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "select p.crossing_frame from putts p "
+            "where p.session_id = %s::uuid and p.putt_index = %s and exists ("
+            "  select 1 from sessions s where s.id = p.session_id "
+            "  and s.user_id = %s)",
+            (session_id, putt_index, uid),
+        )
+        row = cur.fetchone()
+        return row["crossing_frame"] if row else None
 
 
 def offsets_for_sessions(uid: str, session_ids: list[str]) -> list[float]:

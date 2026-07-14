@@ -6,7 +6,11 @@ old scheme where the client simply asserted its own `user_id` in the body.
 
 `require_user` is a FastAPI dependency returning the UID. In local development
 (`AUTH_DEV_UID` set, e.g. by start.sh), it returns that fixed UID without
-verifying, so the stack runs without Firebase Admin credentials.
+verifying, so the stack runs without Firebase Admin credentials. Otherwise it
+verifies the token against Firebase — which needs Application Default
+Credentials (`gcloud auth application-default login` locally; the runtime
+service account on Cloud Run) and the project id in `FIREBASE_PROJECT_ID` /
+`GOOGLE_CLOUD_PROJECT`.
 """
 
 from __future__ import annotations
@@ -67,6 +71,7 @@ def require_user(authorization: Optional[str] = Header(default=None)) -> str:
 
     try:
         decoded = fb_auth.verify_id_token(token, app=app)
-    except Exception:  # noqa: BLE001 — any verify failure is a 401
+    except Exception as e:  # noqa: BLE001 — any verify failure is a 401
+        logger.warning("Token verification failed: %s: %s", type(e).__name__, e)
         raise HTTPException(status_code=401, detail="Invalid or expired token.")
     return decoded["uid"]

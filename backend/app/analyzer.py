@@ -687,6 +687,10 @@ def _analyze_segment(
         "positions": serialized,
         "hough_circles": serialized_hough,
         "crossing_pos": [round(crossing_pos[0], 1), round(crossing_pos[1], 1)],
+        # Absolute source-frame index at the gate crossing (only meaningful when
+        # the track actually crossed; None otherwise). Used to serve a still of
+        # the moment the ball crossed the bottom laser.
+        "crossing_frame": position_frames[seg_index] if seg_index is not None else None,
         "speed_mps": round(speed_mps, 2) if speed_mps is not None else None,
         "crossed_gate": crossing is not None,
         "frames_read": frames_read,
@@ -901,7 +905,8 @@ def analyze_session(
                     "end_s": round(end / effective_fps, 2),
                     **{key: result[key] for key in (
                         "offset_px", "offset_mm", "direction", "speed_mps",
-                        "track_count", "crossing_pos", "positions", "hough_circles",
+                        "track_count", "crossing_pos", "crossing_frame",
+                        "positions", "hough_circles",
                     )},
                 })
             elif include_dropped:
