@@ -33,6 +33,19 @@ _MSG_NO_BALL = (
     "it still at the start of the recording so the analyzer can measure the "
     "scale."
 )
+_MSG_TOO_DARK = (
+    "The scene is too dark to pick out the white ball. Add light or move "
+    "somewhere brighter so the ball stands out against the green, then record "
+    "again."
+)
+
+# Below this mean HSV-value (0-255) the scene is too dark for the white ball to
+# clear the brightness threshold in ``_white_mask`` (v > 150), so ball detection
+# fails not because the ball is missing but because it is underexposed. A
+# well-lit putting scene sits far above this; a dusk/indoor clip that fails
+# detection measures ~25. Used to swap the "place the ball" guidance for the
+# more accurate "add light" guidance.
+DARK_MEAN_V = 60.0
 
 
 def _calibration_message(failures: list[str]) -> str:
@@ -49,6 +62,8 @@ def _calibration_message(failures: list[str]) -> str:
 
     if "laser dot" in dominant:
         return _MSG_NO_GATE
+    if "too dark" in dominant:
+        return _MSG_TOO_DARK
     if "resting ball" in dominant:
         return _MSG_NO_BALL
     if "unreadable" in dominant:
@@ -338,6 +353,48 @@ def _gate_speed_mps(
     return dist_m / dt
 
 
+def _is_underexposed(frame: np.ndarray) -> bool:
+    """True when the frame is too dark for the white ball to register.
+
+    The ball is found by brightness (``_white_mask`` keeps ``v > 150``); if the
+    whole scene sits well below that, detection fails because of exposure, not
+    because the ball is absent. Judged on the mean HSV value so the guidance can
+    say "add light" instead of "place the ball" (see ``DARK_MEAN_V``).
+    """
+    v = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)[:, :, 2]
+    return float(v.mean()) < DARK_MEAN_V
+
+
+def _detect_scene(frame: np.ndarray) -> dict:
+    """Detect the two calibration elements — gate dot and resting ball — plus the
+    exposure verdict, from one frame.
+
+    Shared by the real auto-calibration (``_calibrate``) and the pre-flight
+    "Capture test" (``check_calibration_frame``) so the two can never disagree:
+    both use the colour-segmentation ball detector (no Hough fallback), so a
+    passing pre-flight genuinely predicts that calibration will find the ball.
+    """
+    h, w = frame.shape[:2]
+    min_r = max(8, w // 60)
+    max_r = max(min_r + 20, w // 5)
+
+    lasers = _detect_laser_dots(frame)
+    bottom = lasers[-1] if lasers else None  # gate anchor (bottom-most dot)
+
+    # Rest-ball search is anchored on the gate dot's x when we have one, matching
+    # the corridor _calibrate relies on.
+    candidates = _white_ball_candidates(frame, min_r, max_r)
+    ball = _pick_seed(
+        candidates, w, h, center_x=round(bottom[0]) if bottom is not None else None
+    )
+    return {
+        "lasers": lasers,
+        "bottom": bottom,
+        "ball": ball,
+        "underexposed": _is_underexposed(frame),
+    }
+
+
 def detect_ball_in_frame(
     image_bytes: bytes,
     center_x: Optional[int] = None,
@@ -411,17 +468,35 @@ def check_calibration_frame(image_bytes: bytes) -> dict:
     the two elements calibration needs — the laser gate and the resting ball —
     are both visible, with plain-language guidance when one is missing.
 
-    Reuses the same single-frame detector the analyzer uses, so a passing check
-    means the real recording should calibrate.
+    Runs the *same* detector as the real auto-calibration (``_detect_scene`` /
+    ``_calibrate``), not the live-overlay ``detect_ball_in_frame`` — the latter
+    has a Hough edge fallback that can latch onto a stray bright circle and
+    report a ball the colour-segmentation calibration will not find, so a green
+    pre-flight would not actually predict a successful recording.
     """
-    detection = detect_ball_in_frame(image_bytes)
-    gate_found = detection.get("gate_center_x") is not None
-    ball_found = detection.get("x") is not None
+    buf = np.frombuffer(image_bytes, dtype=np.uint8)
+    frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+    if frame is None:
+        return {
+            "gate_found": False,
+            "ball_found": False,
+            "ok": False,
+            "message": (
+                "Couldn't read the camera frame. Try again, or restart the app."
+            ),
+        }
+
+    scene = _detect_scene(frame)
+    gate_found = scene["bottom"] is not None
+    ball_found = scene["ball"] is not None
 
     if not gate_found:
         message = _MSG_NO_GATE
     elif not ball_found:
-        message = _MSG_NO_BALL
+        # Underexposure is the more actionable diagnosis when the ball is dark
+        # rather than absent; fall back to the "place the ball" guidance only
+        # when the scene is bright enough that the ball really is missing.
+        message = _MSG_TOO_DARK if scene["underexposed"] else _MSG_NO_BALL
     else:
         message = "Looks good — the gate and ball are both in view. Ready to record."
 
@@ -695,18 +770,13 @@ def _calibrate(
     standardized golf-ball diameter, unless both gate-width overrides are
     supplied. Returns ``(calibration, "")`` or ``(None, reason)``.
     """
-    h, w = frame.shape[:2]
-    min_r = max(8, w // 60)
-    max_r = max(min_r + 20, w // 5)
-
-    lasers = _detect_laser_dots(frame)
-    if not lasers:
+    scene = _detect_scene(frame)  # same detector as the pre-flight capture test
+    bottom = scene["bottom"]
+    if bottom is None:
         return None, "no laser dots detected"
-    bottom = lasers[-1]  # gate anchor (bottom-most dot)
 
     # The ball at address anchors both the scale and the near end of the aim line.
-    candidates = _white_ball_candidates(frame, min_r, max_r)
-    ball = _pick_seed(candidates, w, h, center_x=round(bottom[0]))
+    ball = scene["ball"]
 
     if gate_width_px and gate_width_mm:
         mm_per_px = gate_width_mm / gate_width_px
@@ -716,6 +786,9 @@ def _calibrate(
         # plane (the ball is farther, hence smaller, at address).
         mm_per_px = GOLF_BALL_DIAMETER_MM / (2.0 * ball[2])
         scale_source = "ball_radius"
+    elif scene["underexposed"]:
+        # Ball missing because the scene is too dark, not because it is absent.
+        return None, "scene too dark to find the resting ball"
     else:
         return None, "no resting ball to derive the mm-per-px scale"
 
