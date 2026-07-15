@@ -190,6 +190,7 @@ final class UploadService: NSObject, ObservableObject {
             "length_feet": recording.lengthFeet,
             "break_type": recording.breakTypeRaw,
         ]
+        if let putterID = recording.putterID { body["putter_id"] = putterID }
         if let userID = auth.userID { body["user_id"] = userID }
 
         var req = URLRequest(url: url)

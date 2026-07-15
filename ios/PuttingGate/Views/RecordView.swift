@@ -5,10 +5,16 @@ struct RecordView: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var auth: AuthManager
     @StateObject private var captureTest = CaptureTestModel()
+    @StateObject private var putters = PuttersModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var lengthFeet = 9
     @State private var breakType: PuttBreak = .straight
     @State private var showLengthPicker = false
+    /// The putter to tag this session with; defaults to the user's active putter
+    /// once the list loads, and is then left to the user's choice.
+    @State private var selectedPutterID: String?
+    @State private var hasDefaultedPutter = false
 
     private let lengthRange = Array(stride(from: 3, through: 60, by: 3))
 
@@ -23,12 +29,11 @@ struct RecordView: View {
                     recordingIndicator
                 }
                 Spacer()
-                if captureTest.state != .idle {
-                    captureTestCard
-                }
                 if !recorder.isRecording {
+                    if captureTest.state != .idle {
+                        captureTestCard
+                    }
                     exposureControl
-                    captureTestButton
                 }
                 recordButton
             }
@@ -39,6 +44,47 @@ struct RecordView: View {
             }
         }
         .sheet(isPresented: $showLengthPicker) { lengthPickerSheet }
+        .task { await loadPutters() }
+        // Auto-calibration: keep pre-flighting the scene while lining up so the
+        // user records something that will actually analyze. The loop self-stops
+        // once a check passes; these events re-arm it.
+        .onAppear { startAutoIfPossible() }
+        .onDisappear { captureTest.stopAuto() }
+        .onChange(of: recorder.isRecording) { _, isRecording in
+            if isRecording { captureTest.stopAuto() } else { startAutoIfPossible() }
+        }
+        .onChange(of: recorder.permissionDenied) { _, _ in startAutoIfPossible() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                startAutoIfPossible()
+                // Pick up putters added/activated elsewhere (e.g. on the web).
+                Task { await loadPutters() }
+            } else {
+                captureTest.stopAuto()
+            }
+        }
+    }
+
+    /// Load the user's putters and, the first time they arrive, default the
+    /// selection to their active putter. Once defaulted (or once the user picks
+    /// one), later refreshes leave the choice alone.
+    private func loadPutters() async {
+        await putters.load(url: settings.puttersURL, auth: auth)
+        if !hasDefaultedPutter, let active = putters.active {
+            selectedPutterID = active.id
+            hasDefaultedPutter = true
+        }
+    }
+
+    /// Start (or re-arm) the auto-calibration loop when the scene is in a state
+    /// to check: camera available and not currently recording.
+    private func startAutoIfPossible() {
+        guard !recorder.permissionDenied, !recorder.isRecording else { return }
+        captureTest.startAuto(
+            url: settings.calibrationCheckURL,
+            auth: auth,
+            frameProvider: { [weak recorder] in recorder?.captureTestFrame() }
+        )
     }
 
     // MARK: Exposure
@@ -72,24 +118,6 @@ struct RecordView: View {
 
     // MARK: Capture test
 
-    private var captureTestButton: some View {
-        Button {
-            captureTest.run(
-                url: settings.calibrationCheckURL,
-                frame: recorder.captureTestFrame(),
-                auth: auth
-            )
-        } label: {
-            Label("Capture test", systemImage: "checkmark.seal")
-                .font(.subheadline.weight(.semibold))
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(.ultraThinMaterial, in: Capsule())
-        }
-        .buttonStyle(.plain)
-        .disabled(recorder.permissionDenied)
-    }
-
     @ViewBuilder
     private var captureTestCard: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -102,9 +130,14 @@ struct RecordView: View {
                     Text("Checking the scene…")
                 }
             case let .result(verdict):
+                if verdict.ok {
+                    Label("Ready to record", systemImage: "checkmark.seal.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.green)
+                }
                 checkRow(label: "Laser gate", found: verdict.gateFound)
                 checkRow(label: "Ball at address", found: verdict.ballFound)
-                Text(verdict.message)
+                Text(verdict.ok ? "Tap to re-check." : verdict.message)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -119,15 +152,13 @@ struct RecordView: View {
         .padding(14)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
         .overlay(alignment: .topTrailing) {
-            Button {
-                captureTest.dismiss()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.secondary)
-                    .padding(8)
+            if captureTest.isRefreshing {
+                ProgressView().padding(8)
             }
-            .buttonStyle(.plain)
         }
+        // Tap anywhere on the card to force an immediate re-check.
+        .contentShape(RoundedRectangle(cornerRadius: 14))
+        .onTapGesture { startAutoIfPossible() }
     }
 
     private func checkRow(label: String, found: Bool) -> some View {
@@ -157,9 +188,27 @@ struct RecordView: View {
             } label: {
                 infoField(label: "Break", value: breakType.displayName)
             }
+
+            Menu {
+                Picker("Putter", selection: $selectedPutterID) {
+                    Text("None").tag(String?.none)
+                    ForEach(putters.putters) { putter in
+                        Text(putter.name).tag(String?.some(putter.id))
+                    }
+                }
+            } label: {
+                infoField(label: "Putter", value: selectedPutterName)
+            }
+            .disabled(putters.putters.isEmpty)
         }
         .disabled(recorder.isRecording)
         .opacity(recorder.isRecording ? 0.5 : 1)
+    }
+
+    /// Display name for the selected putter, falling back to a placeholder when
+    /// none is chosen (or the user hasn't set any putters up yet).
+    private var selectedPutterName: String {
+        putters.putters.first { $0.id == selectedPutterID }?.name ?? "None"
     }
 
     private func infoField(label: String, value: String) -> some View {
@@ -212,13 +261,20 @@ struct RecordView: View {
             if recorder.isRecording {
                 recorder.stopRecording()
             } else {
-                recorder.startRecording(lengthFeet: lengthFeet, breakType: breakType)
+                recorder.startRecording(
+                    lengthFeet: lengthFeet,
+                    breakType: breakType,
+                    putterID: selectedPutterID
+                )
             }
         } label: {
             ZStack {
+                // Ring turns green when the latest auto-check says the scene is
+                // ready — advisory only; the button stays tappable regardless.
                 Circle()
-                    .stroke(.white, lineWidth: 4)
+                    .stroke(captureTest.isReady ? Color.green : .white, lineWidth: 4)
                     .frame(width: 76, height: 76)
+                    .animation(.easeInOut(duration: 0.2), value: captureTest.isReady)
                 RoundedRectangle(cornerRadius: recorder.isRecording ? 6 : 30)
                     .fill(.red)
                     .frame(

@@ -17,8 +17,12 @@ struct CalibrationVerdict: Decodable, Equatable {
     }
 }
 
-/// Drives the "Capture test": grabs a live frame, POSTs it to the backend
-/// pre-flight endpoint, and publishes the result for the record screen.
+/// Drives the "Capture test" as a background auto-calibration loop: on an
+/// interval it grabs a live frame, POSTs it to the backend pre-flight endpoint,
+/// and publishes the result for the record screen — so the scene is dialed in
+/// before recording. The loop stops once a check passes (`ok`) to avoid hammering
+/// the endpoint, and is re-armed by the view on meaningful events (recording
+/// finished, foregrounded, tab re-entered, or a tap to re-check).
 @MainActor
 final class CaptureTestModel: ObservableObject {
 
@@ -30,30 +34,99 @@ final class CaptureTestModel: ObservableObject {
     }
 
     @Published private(set) var state: State = .idle
+    /// True while a check is in flight *and* a prior result is already showing,
+    /// so the card can show a subtle spinner without blanking the last verdict.
+    @Published private(set) var isRefreshing = false
 
-    func dismiss() { state = .idle }
+    private var autoTask: Task<Void, Never>?
 
-    /// Run a check against `url` using an already-captured JPEG `frame`. Both are
-    /// gathered by the caller (the frame from the recorder) so this stays free of
-    /// capture/settings dependencies. `auth` supplies the Firebase ID token the
-    /// backend requires.
-    func run(url: URL?, frame: Data?, auth: AuthManager) {
+    /// Whether the latest verdict passed — the record screen's "ready" signal.
+    var isReady: Bool {
+        if case let .result(verdict) = state { return verdict.ok }
+        return false
+    }
+
+    /// Start (or re-arm) the auto-check loop. Runs one check immediately, then
+    /// repeats every `interval` seconds until a check passes, at which point it
+    /// settles and stops polling. Calling it again cancels any running loop and
+    /// starts fresh — this is also the "re-check now" entry point.
+    ///
+    /// `frameProvider` yields the latest camera frame as JPEG (from the
+    /// recorder); `auth` supplies the Firebase ID token the backend requires.
+    func startAuto(
+        url: URL?,
+        auth: AuthManager,
+        frameProvider: @escaping () -> Data?,
+        interval: TimeInterval = 10
+    ) {
+        autoTask?.cancel()
+        autoTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                let outcome = await self.tick(
+                    url: url, auth: auth, frameProvider: frameProvider
+                )
+                if outcome == .passed { break } // settle on "ready"; stop polling
+                // Retry fast while the camera warms up (no frame yet); otherwise
+                // wait the full interval before the next check.
+                let delay = outcome == .noFrame ? 1.0 : interval
+                try? await Task.sleep(for: .seconds(delay))
+            }
+            self.isRefreshing = false
+        }
+    }
+
+    private enum TickOutcome { case passed, notReady, noFrame }
+
+    /// Stop the loop (e.g. while recording or backgrounded). Leaves `state` as-is
+    /// so the last verdict stays available; the view hides the card as needed.
+    func stopAuto() {
+        autoTask?.cancel()
+        autoTask = nil
+        isRefreshing = false
+    }
+
+    /// Run one check. Returns the outcome, which the loop uses to decide whether
+    /// to settle (`.passed`), retry soon (`.noFrame`), or wait the full interval.
+    private func tick(
+        url: URL?,
+        auth: AuthManager,
+        frameProvider: @escaping () -> Data?
+    ) async -> TickOutcome {
         guard let url else {
             state = .failed("No backend URL configured.")
-            return
+            return .notReady
         }
-        guard let frame else {
-            state = .failed("Couldn't capture a frame — give the camera a moment and try again.")
-            return
+        // No frame yet (camera still warming up): keep whatever we're showing and
+        // try again soon rather than flashing an error.
+        guard let frame = frameProvider() else { return .noFrame }
+
+        // Refresh in place when a result is already showing; only show the full
+        // "checking" state on the very first check so the card doesn't flicker.
+        let hadResult: Bool
+        if case .result = state {
+            hadResult = true
+            isRefreshing = true
+        } else {
+            hadResult = false
+            state = .checking
         }
-        state = .checking
-        Task {
-            do {
-                let token = await auth.validAccessToken()
-                state = .result(try await Self.postFrame(frame, to: url, token: token))
-            } catch {
-                state = .failed("Couldn't reach the analyzer. Check your connection and try again.")
+        defer { isRefreshing = false }
+
+        do {
+            let token = await auth.validAccessToken()
+            let verdict = try await Self.postFrame(frame, to: url, token: token)
+            state = .result(verdict)
+            return verdict.ok ? .passed : .notReady
+        } catch {
+            // Ignore a transient blip when we already have a verdict on screen;
+            // otherwise surface a friendly failure.
+            if !hadResult {
+                state = .failed(
+                    "Couldn't reach the analyzer. Check your connection and try again."
+                )
             }
+            return .notReady
         }
     }
 

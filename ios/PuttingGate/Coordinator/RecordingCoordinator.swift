@@ -16,22 +16,23 @@ final class RecordingCoordinator: ObservableObject {
         self.uploads = uploads
         self.modelContainer = modelContainer
 
-        recorder.onRecordingFinished = { [weak self] url, capturedAt, duration, lengthFeet, breakType in
+        recorder.onRecordingFinished = { [weak self] url, capturedAt, duration, lengthFeet, breakType, putterID in
             self?.saveRecording(
                 fileName: url.lastPathComponent, capturedAt: capturedAt,
-                duration: duration, lengthFeet: lengthFeet, breakType: breakType
+                duration: duration, lengthFeet: lengthFeet, breakType: breakType,
+                putterID: putterID
             )
         }
     }
 
     private func saveRecording(
         fileName: String, capturedAt: Date, duration: Double,
-        lengthFeet: Int, breakType: PuttBreak
+        lengthFeet: Int, breakType: PuttBreak, putterID: String?
     ) {
         let context = modelContainer.mainContext
         let recording = Recording(
             fileName: fileName, capturedAt: capturedAt, duration: duration,
-            lengthFeet: lengthFeet, breakType: breakType
+            lengthFeet: lengthFeet, breakType: breakType, putterID: putterID
         )
         context.insert(recording)
         try? context.save()

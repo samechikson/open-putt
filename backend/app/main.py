@@ -196,7 +196,8 @@ async def analyze_session_endpoint(
 
     Body: `{session_id, object_name, gate_width_px?, gate_width_mm?, fps?}` plus
     optional metadata (`file_name, captured_at, duration, length_feet,
-    break_type`). The owner is the authenticated user (`uid`), not a body field.
+    break_type, putter_id`). The owner is the authenticated user (`uid`), not a
+    body field; `putter_id` is only applied if the user owns that putter.
     Creates the session row as 'queued' and starts the analysis in the background
     (a Cloud Task, or in-process in local mode). Clients poll the session for
     'done'/'error'. Returns immediately with 202.
@@ -215,6 +216,13 @@ async def analyze_session_endpoint(
     if not await run_in_threadpool(cloud.object_exists, object_name):
         raise HTTPException(status_code=400, detail="Uploaded file not found. Upload it first.")
 
+    putter_id = body.get("putter_id")
+    if putter_id is not None:
+        try:
+            putter_id = str(uuid.UUID(str(putter_id)))
+        except (ValueError, TypeError, AttributeError):
+            raise HTTPException(status_code=400, detail="putter_id must be a UUID.")
+
     metadata = {
         "user_id": uid,
         "file_name": body.get("file_name"),
@@ -222,6 +230,7 @@ async def analyze_session_endpoint(
         "ios_duration_s": body.get("duration"),
         "length_feet": body.get("length_feet"),
         "break_type": body.get("break_type"),
+        "putter_id": putter_id,
     }
     gate_width_px = int(body.get("gate_width_px") or 0)
     gate_width_mm = float(body.get("gate_width_mm") or 0.0)

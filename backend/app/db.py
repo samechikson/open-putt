@@ -121,7 +121,9 @@ def create_pending_session(
     """Insert (or reset) a session row in the 'queued' state before analysis.
 
     Written up-front so the async job has a row to update and the client can
-    poll it. Returns the id, or None when persistence is disabled.
+    poll it. `metadata["putter_id"]` tags the session's putter, and is only
+    applied if it names a putter the user owns (otherwise the row is left
+    untagged). Returns the id, or None when persistence is disabled.
     """
     pool = _get_pool()
     if pool is None:
@@ -131,9 +133,11 @@ def create_pending_session(
             """
             insert into sessions
               (id, user_id, file_name, captured_at, ios_duration_s,
-               length_feet, break_type, status, error, putt_count)
+               length_feet, break_type, putter_id, status, error, putt_count)
             values
-              (%s::uuid, %s, %s, %s, %s, %s, %s::putt_break, 'queued', null, 0)
+              (%s::uuid, %s, %s, %s, %s, %s, %s::putt_break,
+               (select id from putters where id = %s::uuid and user_id = %s),
+               'queued', null, 0)
             on conflict (id) do update set
               user_id        = excluded.user_id,
               file_name      = excluded.file_name,
@@ -141,6 +145,7 @@ def create_pending_session(
               ios_duration_s = excluded.ios_duration_s,
               length_feet    = excluded.length_feet,
               break_type     = excluded.break_type,
+              putter_id      = excluded.putter_id,
               status         = 'queued',
               error          = null,
               putt_count     = 0
@@ -153,6 +158,10 @@ def create_pending_session(
                 metadata.get("ios_duration_s"),
                 metadata.get("length_feet"),
                 metadata.get("break_type"),
+                # Only tag a putter the caller actually owns; a null/unknown id
+                # resolves to NULL (untagged), matching update_session_metadata.
+                metadata.get("putter_id"),
+                metadata.get("user_id"),
             ),
         )
         # Clear any putts from a previous analysis of the same id (re-upload).

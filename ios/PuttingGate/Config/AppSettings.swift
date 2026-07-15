@@ -23,6 +23,9 @@ final class AppSettings: ObservableObject {
     /// Endpoint that pre-flights a single frame: is the gate + ball visible?
     var calibrationCheckURL: URL? { URL(string: Self.backendBaseURL + "/calibration-check") }
 
+    /// Endpoint listing the user's putters (active first), for tagging a session.
+    var puttersURL: URL? { URL(string: Self.backendBaseURL + "/putters") }
+
     // MARK: Capture
 
     /// Capture/record resolution.

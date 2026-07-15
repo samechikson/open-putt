@@ -16,7 +16,8 @@ final class CameraRecorder: NSObject, ObservableObject {
     /// Called on the main actor when a recording finishes writing, along with
     /// the putt metadata that was set when recording started.
     var onRecordingFinished: ((_ fileURL: URL, _ capturedAt: Date, _ duration: Double,
-                               _ lengthFeet: Int, _ breakType: PuttBreak) -> Void)?
+                               _ lengthFeet: Int, _ breakType: PuttBreak,
+                               _ putterID: String?) -> Void)?
 
     let captureSession = AVCaptureSession()
 
@@ -41,6 +42,7 @@ final class CameraRecorder: NSObject, ObservableObject {
     /// Putt metadata captured at the moment recording started.
     private var pendingLengthFeet = 9
     private var pendingBreakType: PuttBreak = .straight
+    private var pendingPutterID: String?
 
     init(settings: AppSettings) {
         self.settings = settings
@@ -219,7 +221,7 @@ final class CameraRecorder: NSObject, ObservableObject {
 
     // MARK: Recording control
 
-    func startRecording(lengthFeet: Int, breakType: PuttBreak) {
+    func startRecording(lengthFeet: Int, breakType: PuttBreak, putterID: String?) {
         sessionQueue.async { [weak self] in
             guard let self, self.captureSession.isRunning, !self.movieOutput.isRecording else { return }
             let fileName = "recording-\(UUID().uuidString).mov"
@@ -228,6 +230,7 @@ final class CameraRecorder: NSObject, ObservableObject {
             self.recordingStartedAt = .now
             self.pendingLengthFeet = lengthFeet
             self.pendingBreakType = breakType
+            self.pendingPutterID = putterID
             self.movieOutput.startRecording(to: url, recordingDelegate: self)
         }
     }
@@ -308,10 +311,13 @@ extension CameraRecorder: AVCaptureFileOutputRecordingDelegate {
         let duration = CMTimeGetSeconds(asset.duration)
         let lengthFeet = pendingLengthFeet
         let breakType = pendingBreakType
+        let putterID = pendingPutterID
 
         DispatchQueue.main.async {
             self.isRecording = false
-            self.onRecordingFinished?(outputFileURL, capturedAt, max(0, duration), lengthFeet, breakType)
+            self.onRecordingFinished?(
+                outputFileURL, capturedAt, max(0, duration), lengthFeet, breakType, putterID
+            )
         }
     }
 }

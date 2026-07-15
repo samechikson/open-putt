@@ -26,6 +26,9 @@ final class Recording {
     var lengthFeet: Int = 9
     /// User-selected slope + break direction (raw value of `PuttBreak`).
     var breakTypeRaw: String = PuttBreak.straight.rawValue
+    /// The putter used, as the backend putter's UUID string. Optional: a session
+    /// can be untagged (no putters set up, or none selected).
+    var putterID: String?
 
     var uploadStateRaw: String
     var uploadAttempts: Int
@@ -37,7 +40,8 @@ final class Recording {
         capturedAt: Date = .now,
         duration: Double = 0,
         lengthFeet: Int = 9,
-        breakType: PuttBreak = .straight
+        breakType: PuttBreak = .straight,
+        putterID: String? = nil
     ) {
         self.id = id
         self.fileName = fileName
@@ -45,6 +49,7 @@ final class Recording {
         self.duration = duration
         self.lengthFeet = lengthFeet
         self.breakTypeRaw = breakType.rawValue
+        self.putterID = putterID
         self.uploadStateRaw = UploadState.pending.rawValue
         self.uploadAttempts = 0
         self.lastUploadError = nil
