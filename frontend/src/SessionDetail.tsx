@@ -212,6 +212,10 @@ export default function SessionDetail({
   const speedDispersion = stdev(speeds);
   const biasSide = bias == null ? "center" : golferSide(bias);
 
+  // The hardware gate stores the three per-sensor offsets behind each putt's
+  // average; video-pipeline putts have none. Only show the column when present.
+  const hasSensors = putts.some((p) => p.sensor_offsets_mm != null);
+
   const fmt = (n: number | null, digits = 1) =>
     n == null ? "—" : n.toFixed(digits);
 
@@ -584,6 +588,14 @@ export default function SessionDetail({
                       <th className="px-4 py-3 font-semibold">Offset</th>
                       <th className="px-4 py-3 font-semibold">Direction</th>
                       <th className="px-4 py-3 font-semibold">Speed</th>
+                      {hasSensors && (
+                        <th
+                          className="px-4 py-3 font-semibold"
+                          title="Per-sensor offset (golfer's view; + = right)"
+                        >
+                          Sensors (mm)
+                        </th>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -619,6 +631,22 @@ export default function SessionDetail({
                               ? "—"
                               : `${p.speed_mps.toFixed(2)} m/s`}
                           </td>
+                          {hasSensors && (
+                            <td className="px-4 py-3 text-[#888] font-mono text-xs whitespace-nowrap">
+                              {p.sensor_offsets_mm == null
+                                ? "—"
+                                : p.sensor_offsets_mm
+                                    .map((v) => {
+                                      if (v == null) return "—";
+                                      // Golfer's view: undo the face-on mirror, as
+                                      // the Offset/Direction columns do.
+                                      const g = -v;
+                                      const sign = g > 0 ? "+" : g < 0 ? "−" : "";
+                                      return sign + Math.abs(g).toFixed(1);
+                                    })
+                                    .join(" / ")}
+                            </td>
+                          )}
                         </tr>
                       );
                     })}
