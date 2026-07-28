@@ -19,7 +19,9 @@ const uint8_t CHANNELS[3] = {0, 7, 4};        // Sensor 1, 2, 3
 const int     N = 3;
 
 const int      LASER_PIN        = 26;
-const float    CENTER_MM        = 89.0;       // measured center distance (this mount)
+const int      LASER_FLASH_COUNT = 3;         // blinks that confirm a captured putt
+const uint32_t LASER_FLASH_MS    = 120;       // on/off half-period of each blink
+const float    CENTER_MM        = 80.0;       // measured center distance (this mount)
 const float    BALL_DIAMETER_MM = 42.67;      // standard golf ball
 const float    BALL_RADIUS_MM   = BALL_DIAMETER_MM / 2.0;
 const float    DETECT_MARGIN_MM = 25.0;       // drop below baseline = ball present
@@ -28,6 +30,11 @@ const uint32_t CLEAR_TIMEOUT_MS = 150;        // gate clear this long -> finaliz
 const int      CALIB_SAMPLES    = 20;         // empty-gate reads per sensor at startup
 const bool     INVERT_PUSH_PULL = false;      // flip if labels come out backwards
 const float    GAP_MM_FALLBACK  = 178.0;      // used only if a sensor won't calibrate
+// Center-to-center distance between adjacent in-line sensors (along the roll
+// direction). Speed = distance travelled / time between sensor crossings.
+// MEASURE THIS on your mount — an inaccurate value scales every speed linearly.
+// Assumes the three sensors are evenly spaced (Sensor 1 -> 2 -> 3).
+const float    SENSOR_SPACING_MM = 33.32;
 
 VL53L4CD sensor0(&Wire, -1);
 VL53L4CD sensor1(&Wire, -1);
@@ -41,6 +48,7 @@ float threshold[N];
 bool     eventActive = false;
 uint32_t lastSeen    = 0;
 float    minReading[N];       // -1 = sensor hasn't seen the ball this event
+uint32_t minReadingTime[N];   // millis() at each sensor's closest approach (for speed)
 int      puttNum     = 0;
 
 // One session per boot; every putt this power-cycle is grouped under it.
@@ -136,14 +144,37 @@ void report() {
     Serial.print(avg >= 0 ? "+" : "-");
     Serial.print(mag, 1); Serial.print(" mm  "); Serial.println(label);
 
+    // Speed: the ball crosses the in-line sensors in sequence, so the separation
+    // between the first and last sensor it tripped, over the time between those
+    // crossings, is its speed. mm/ms == m/s, so no unit conversion is needed.
+    // Needs the ball to trip >= 2 sensors; otherwise it's not measurable (null).
+    float speed_mps = -1.0;
+    int firstIdx = -1, lastIdx = -1;
+    for (int i = 0; i < N; i++) {
+      if (minReading[i] < 0) continue;
+      if (firstIdx < 0) firstIdx = i;
+      lastIdx = i;
+    }
+    if (firstIdx >= 0 && lastIdx > firstIdx) {
+      uint32_t t0 = minReadingTime[firstIdx], t1 = minReadingTime[lastIdx];
+      uint32_t dt = (t1 >= t0) ? (t1 - t0) : (t0 - t1);
+      if (dt > 0) {
+        speed_mps = (SENSOR_SPACING_MM * (lastIdx - firstIdx)) / (float)dt;
+        Serial.print("  Speed:          ");
+        Serial.print(speed_mps, 2); Serial.println(" m/s");
+      }
+    }
+
     // Build the putt payload and POST it. Per-sensor entries are the signed
-    // offset (or null where that sensor didn't see the ball). Matches the
-    // backend's POST /api/device/putts body.
+    // offset (or null where that sensor didn't see the ball); speed_mps is null
+    // when the ball tripped fewer than two sensors. Matches the backend's
+    // POST /api/device/putts body.
     String json = "{";
     json += "\"session_id\":\"" + sessionId + "\",";
     json += "\"putt_index\":" + String(puttNum) + ",";
     json += "\"offset_mm\":" + String(avg, 1) + ",";
     json += "\"label\":\"" + String(label) + "\",";
+    json += "\"speed_mps\":" + (speed_mps >= 0 ? String(speed_mps, 2) : String("null")) + ",";
     json += "\"sensors\":[";
     for (int i = 0; i < N; i++) {
       if (i) json += ",";
@@ -152,13 +183,27 @@ void report() {
         : String((minReading[i] + BALL_RADIUS_MM) - CENTER_MM, 1);
     }
     json += "]}";
-    postPutt(json);
+    int code = postPutt(json);
+    if (code >= 200 && code < 300) flashLaser();   // confirm only a successful send
   }
 }
 
 void resetEvent() {
   eventActive = false;
   for (int i = 0; i < N; i++) minReading[i] = -1;
+}
+
+// Blink the gate laser a few times to confirm a putt was successfully sent to the
+// backend, then leave it on (it's the aiming reference for the next putt).
+// Detection uses the ToF sensors, not the laser, so blinking it doesn't affect
+// measurement.
+void flashLaser() {
+  for (int i = 0; i < LASER_FLASH_COUNT; i++) {
+    digitalWrite(LASER_PIN, LOW);
+    delay(LASER_FLASH_MS);
+    digitalWrite(LASER_PIN, HIGH);
+    delay(LASER_FLASH_MS);
+  }
 }
 
 // A canonical UUID (8-4-4-4-12 hex) for this session. The backend stores it as
@@ -180,9 +225,29 @@ String makeSessionId() {
   return String(buf);
 }
 
+// On a failed connect, list the 2.4 GHz networks the ESP32 can actually see.
+// If the target SSID is here, the password is wrong; if it's absent, the hotspot
+// is 5 GHz-only (enable "Maximize Compatibility") or asleep.
+void scanNetworks() {
+  Serial.println("WiFi: scanning for visible 2.4 GHz networks...");
+  int n = WiFi.scanNetworks();
+  if (n <= 0) {
+    Serial.println("  (none found — no 2.4 GHz network in range)");
+  } else {
+    for (int i = 0; i < n; i++) {
+      Serial.print("  '"); Serial.print(WiFi.SSID(i));
+      Serial.print("'  RSSI="); Serial.print(WiFi.RSSI(i));
+      Serial.println(WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "  (open)" : "  (secured)");
+    }
+  }
+  WiFi.scanDelete();
+}
+
 void connectWiFi() {
-  Serial.print("WiFi: connecting to "); Serial.println(WIFI_SSID);
+  Serial.print("WiFi: connecting to '"); Serial.print(WIFI_SSID); Serial.println("'");
   WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true);          // clear any stale association from a prior boot
+  delay(100);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
@@ -191,7 +256,9 @@ void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.print("\nWiFi: connected, IP "); Serial.println(WiFi.localIP());
   } else {
-    Serial.println("\nWiFi: FAILED (keeping detection running offline).");
+    Serial.print("\nWiFi: FAILED (status="); Serial.print(WiFi.status());
+    Serial.println(", keeping detection running offline).");
+    scanNetworks();               // show what's actually visible to bisect the cause
   }
 }
 
@@ -253,11 +320,14 @@ void loop() {
     if (d > 0 && d < threshold[i]) {              // ball in this beam
       eventActive = true;
       lastSeen = now;
-      if (minReading[i] < 0 || d < minReading[i]) minReading[i] = d;  // closest approach
+      if (minReading[i] < 0 || d < minReading[i]) {  // closest approach
+        minReading[i] = d;
+        minReadingTime[i] = now;                     // when the ball was nearest this sensor
+      }
     }
   }
   if (eventActive && (now - lastSeen) > CLEAR_TIMEOUT_MS) {
-    report();
+    report();         // print + POST; flashes the laser only if the POST succeeds
     resetEvent();
   }
 }

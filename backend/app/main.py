@@ -581,7 +581,7 @@ _LABEL_TO_DIRECTION = {"PUSH": "right", "PULL": "left", "CENTER": "center"}
 async def device_putt(request: Request, uid: str = Depends(require_device)):
     """Ingest one pre-measured putt from the hardware gate.
 
-    Body: `{session_id, putt_index, offset_mm, label, sensors?}`. The device has
+    Body: `{session_id, putt_index, offset_mm, label, speed_mps?, sensors?}`. The device has
     already done the analysis, so there's no video or calibration — this upserts
     a video-less, already-`done` session and appends the putt. Idempotent per
     (session_id, putt_index), so the device can safely retry. `sensors` (the
@@ -609,8 +609,17 @@ async def device_putt(request: Request, uid: str = Depends(require_device)):
     if direction is None:
         raise HTTPException(status_code=400, detail="label must be PUSH, PULL, or CENTER.")
 
+    # Speed is optional: the ball must trip at least two sensors to time it, so a
+    # glancing pass sends null. Persist whatever the device measured.
+    speed_mps = body.get("speed_mps")
+    if speed_mps is not None:
+        try:
+            speed_mps = float(speed_mps)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="speed_mps must be a number.")
+
     session = await run_in_threadpool(
-        ingest_device_putt, uid, session_id, putt_index, offset_mm, direction
+        ingest_device_putt, uid, session_id, putt_index, offset_mm, direction, speed_mps
     )
     if session is None:
         raise HTTPException(status_code=503, detail="Persistence is not configured.")

@@ -313,15 +313,17 @@ def ingest_device_putt(
     putt_index: int,
     offset_mm: float,
     direction: str,
+    speed_mps: Optional[float] = None,
 ) -> Optional[str]:
     """Record one putt measured by the hardware gate, upserting its session.
 
     Unlike the video pipeline, the device has already done the analysis: there's
-    no clip, calibration, or fps — just a measured offset and side. The first
-    putt of a session creates the (video-less, already-`done`) row; each putt
-    upserts into it, so a dropped connection costs at most one putt and a retry
-    is idempotent (unique on session_id + putt_index). `putt_count` is kept in
-    sync with the actual rows. No-op / None when persistence is disabled.
+    no clip, calibration, or fps — just a measured offset, side, and (when the
+    ball tripped more than one sensor) speed. The first putt of a session creates
+    the (video-less, already-`done`) row; each putt upserts into it, so a dropped
+    connection costs at most one putt and a retry is idempotent (unique on
+    session_id + putt_index). `putt_count` is kept in sync with the actual rows.
+    No-op / None when persistence is disabled.
     """
     pool = _get_pool()
     if pool is None:
@@ -339,13 +341,14 @@ def ingest_device_putt(
         )
         cur.execute(
             """
-            insert into putts (session_id, putt_index, offset_mm, direction)
-            values (%s::uuid, %s, %s, %s::putt_direction)
+            insert into putts (session_id, putt_index, offset_mm, direction, speed_mps)
+            values (%s::uuid, %s, %s, %s::putt_direction, %s)
             on conflict (session_id, putt_index) do update set
               offset_mm = excluded.offset_mm,
-              direction = excluded.direction
+              direction = excluded.direction,
+              speed_mps = excluded.speed_mps
             """,
-            (session_id, putt_index, offset_mm, direction),
+            (session_id, putt_index, offset_mm, direction, speed_mps),
         )
         cur.execute(
             "update sessions set putt_count = "
