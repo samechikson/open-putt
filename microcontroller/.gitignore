@@ -1,0 +1,9 @@
+# Field credentials + device secret — never commit.
+secrets.h
+**/secrets.h
+
+# Arduino build artifacts
+build/
+*.hex
+*.bin
+*.elf

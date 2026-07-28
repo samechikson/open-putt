@@ -39,8 +39,9 @@ from .db import (
     update_putter,
     delete_putter,
     set_active_putter,
+    ingest_device_putt,
 )
-from .auth import require_user
+from .auth import require_user, require_device
 from . import cloud
 
 logger = logging.getLogger(__name__)
@@ -566,6 +567,56 @@ async def calibration_check(
     data = await frame.read()
     result = await run_in_threadpool(check_calibration_frame, data)
     return JSONResponse(result)
+
+
+# MARK: Device ingestion (hardware gate; secret-authenticated, no video)
+
+# The gate reports PUSH (past center) / PULL (short of center); map those to the
+# app's putt_direction sides. Flip on the device (INVERT_PUSH_PULL) if a side
+# comes out mirrored for your sensor mounting.
+_LABEL_TO_DIRECTION = {"PUSH": "right", "PULL": "left", "CENTER": "center"}
+
+
+@app.post("/device/putts", status_code=201)
+async def device_putt(request: Request, uid: str = Depends(require_device)):
+    """Ingest one pre-measured putt from the hardware gate.
+
+    Body: `{session_id, putt_index, offset_mm, label, sensors?}`. The device has
+    already done the analysis, so there's no video or calibration — this upserts
+    a video-less, already-`done` session and appends the putt. Idempotent per
+    (session_id, putt_index), so the device can safely retry. `sensors` (the
+    per-sensor offsets) is accepted for forward-compat but not persisted yet.
+    """
+    body = await request.json()
+
+    session_id = body.get("session_id")
+    try:
+        session_id = str(uuid.UUID(str(session_id)))
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=400, detail="session_id must be a UUID.")
+
+    try:
+        putt_index = int(body.get("putt_index"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="putt_index must be an integer.")
+
+    try:
+        offset_mm = float(body.get("offset_mm"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="offset_mm must be a number.")
+
+    direction = _LABEL_TO_DIRECTION.get(str(body.get("label", "")).upper())
+    if direction is None:
+        raise HTTPException(status_code=400, detail="label must be PUSH, PULL, or CENTER.")
+
+    session = await run_in_threadpool(
+        ingest_device_putt, uid, session_id, putt_index, offset_mm, direction
+    )
+    if session is None:
+        raise HTTPException(status_code=503, detail="Persistence is not configured.")
+    return JSONResponse(
+        {"session_id": session_id, "putt_index": putt_index}, status_code=201
+    )
 
 
 # MARK: Session reads (ownership-scoped by the authenticated user)

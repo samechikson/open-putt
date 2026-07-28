@@ -305,6 +305,57 @@ def persist_session(
     return session_id
 
 
+# ---- device ingestion (hardware gate; no video, pre-measured putts) ---------
+
+def ingest_device_putt(
+    uid: str,
+    session_id: str,
+    putt_index: int,
+    offset_mm: float,
+    direction: str,
+) -> Optional[str]:
+    """Record one putt measured by the hardware gate, upserting its session.
+
+    Unlike the video pipeline, the device has already done the analysis: there's
+    no clip, calibration, or fps — just a measured offset and side. The first
+    putt of a session creates the (video-less, already-`done`) row; each putt
+    upserts into it, so a dropped connection costs at most one putt and a retry
+    is idempotent (unique on session_id + putt_index). `putt_count` is kept in
+    sync with the actual rows. No-op / None when persistence is disabled.
+    """
+    pool = _get_pool()
+    if pool is None:
+        return None
+    with pool.connection() as conn, conn.cursor() as cur:
+        # Create the session on first putt; leave ownership untouched on later
+        # putts. Video/calibration columns stay null — this session has no clip.
+        cur.execute(
+            """
+            insert into sessions (id, user_id, status, putt_count)
+            values (%s::uuid, %s, 'done', 0)
+            on conflict (id) do update set status = 'done'
+            """,
+            (session_id, uid),
+        )
+        cur.execute(
+            """
+            insert into putts (session_id, putt_index, offset_mm, direction)
+            values (%s::uuid, %s, %s, %s::putt_direction)
+            on conflict (session_id, putt_index) do update set
+              offset_mm = excluded.offset_mm,
+              direction = excluded.direction
+            """,
+            (session_id, putt_index, offset_mm, direction),
+        )
+        cur.execute(
+            "update sessions set putt_count = "
+            "(select count(*) from putts where session_id = %s::uuid) "
+            "where id = %s::uuid",
+            (session_id, session_id),
+        )
+    return session_id
+
+
 # ---- session user-facing operations (ownership-scoped by uid) ---------------
 
 def list_sessions(uid: str) -> list[dict[str, Any]]:

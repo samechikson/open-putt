@@ -15,6 +15,7 @@ service account on Cloud Run) and the project id in `FIREBASE_PROJECT_ID` /
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 from typing import Optional
@@ -75,3 +76,22 @@ def require_user(authorization: Optional[str] = Header(default=None)) -> str:
         logger.warning("Token verification failed: %s: %s", type(e).__name__, e)
         raise HTTPException(status_code=401, detail="Invalid or expired token.")
     return decoded["uid"]
+
+
+def require_device(x_device_token: Optional[str] = Header(default=None)) -> str:
+    """Return the Firebase UID a hardware device's putts are attributed to.
+
+    Embedded devices (the ESP32 putt gate) can't do a full Firebase sign-in, so
+    they authenticate with a single long-lived secret instead of an ID token —
+    the same shared-secret pattern `/process` uses. `DEVICE_INGEST_TOKEN` is the
+    secret (compared constant-time against the `X-Device-Token` header) and
+    `DEVICE_INGEST_UID` is the owner all device sessions are attributed to.
+    Single-tenant by design: one token → one user.
+    """
+    expected = os.environ.get("DEVICE_INGEST_TOKEN")
+    uid = os.environ.get("DEVICE_INGEST_UID")
+    if not expected or not uid:
+        raise HTTPException(status_code=503, detail="Device ingestion is not configured.")
+    if not x_device_token or not hmac.compare_digest(x_device_token, expected):
+        raise HTTPException(status_code=401, detail="Invalid device token.")
+    return uid

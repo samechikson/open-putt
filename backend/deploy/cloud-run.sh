@@ -114,7 +114,8 @@ gcloud projects add-iam-policy-binding "$PROJECT" \
 # the SA must be able to create tokens for itself.
 gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
   --member="serviceAccount:${SA_EMAIL}" --role=roles/iam.serviceAccountTokenCreator
-for S in DATABASE_URL CORS_ALLOW_ORIGINS TASKS_INTERNAL_TOKEN; do
+for S in DATABASE_URL CORS_ALLOW_ORIGINS TASKS_INTERNAL_TOKEN \
+         DEVICE_INGEST_TOKEN DEVICE_INGEST_UID; do
   gcloud secrets add-iam-policy-binding "$S" \
     --member="serviceAccount:${SA_EMAIL}" --role=roles/secretmanager.secretAccessor
 done
@@ -135,7 +136,7 @@ gcloud run deploy "$SERVICE" \
   --allow-unauthenticated \
   --cpu=2 --memory=2Gi --timeout=3600 --concurrency=2 --min-instances=0 --max-instances=3 \
   --set-env-vars="GCP_PROJECT=${PROJECT},GCS_BUCKET=${PROJECT}-uploads,TASKS_QUEUE=${QUEUE},TASKS_LOCATION=${REGION},GCS_SIGNER_SA=${SA_EMAIL},FIREBASE_PROJECT_ID=${PROJECT}" \
-  --set-secrets="DATABASE_URL=DATABASE_URL:latest,CORS_ALLOW_ORIGINS=CORS_ALLOW_ORIGINS:latest,TASKS_INTERNAL_TOKEN=TASKS_INTERNAL_TOKEN:latest"
+  --set-secrets="DATABASE_URL=DATABASE_URL:latest,CORS_ALLOW_ORIGINS=CORS_ALLOW_ORIGINS:latest,TASKS_INTERNAL_TOKEN=TASKS_INTERNAL_TOKEN:latest,DEVICE_INGEST_TOKEN=DEVICE_INGEST_TOKEN:latest,DEVICE_INGEST_UID=DEVICE_INGEST_UID:latest"
 
 # ---- 8. Wire PROCESS_URL and redeploy env ----------------------------------
 URL="$(gcloud run services describe "$SERVICE" --region="$REGION" --format='value(status.url)')"
