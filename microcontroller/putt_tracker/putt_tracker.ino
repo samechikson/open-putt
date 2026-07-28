@@ -21,7 +21,7 @@ const int     N = 3;
 const int      LASER_PIN        = 26;
 const int      LASER_FLASH_COUNT = 3;         // blinks that confirm a captured putt
 const uint32_t LASER_FLASH_MS    = 120;       // on/off half-period of each blink
-const float    CENTER_MM        = 80.0;       // measured center distance (this mount)
+const float    CENTER_MM        = 89.0;       // measured center distance (this mount)
 const float    BALL_DIAMETER_MM = 42.67;      // standard golf ball
 const float    BALL_RADIUS_MM   = BALL_DIAMETER_MM / 2.0;
 const float    DETECT_MARGIN_MM = 25.0;       // drop below baseline = ball present

@@ -240,6 +240,9 @@ export interface PuttRow {
   // Source-frame index where the ball crossed the gate (bottom laser). Null for
   // putts analyzed before this was recorded — no crossing still is available.
   crossing_frame: number | null;
+  // Per-sensor offsets from the hardware gate (device mounting order; null per
+  // sensor that didn't see the ball). Null entirely for video-pipeline putts.
+  sensor_offsets_mm: (number | null)[] | null;
 }
 
 export async function fetchPutts(sessionId: string): Promise<PuttRow[]> {

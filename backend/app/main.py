@@ -618,8 +618,29 @@ async def device_putt(request: Request, uid: str = Depends(require_device)):
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="speed_mps must be a number.")
 
+    # Per-sensor offsets behind the average, in the device's mounting order; a
+    # sensor that didn't see the ball sends null. Optional / forward-compatible.
+    sensors = body.get("sensors")
+    if sensors is not None:
+        if not isinstance(sensors, list):
+            raise HTTPException(status_code=400, detail="sensors must be a list.")
+        try:
+            sensors = [None if v is None else float(v) for v in sensors]
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="sensors must be numbers or null.")
+
+    # The device isn't a camera, so it has no face-on mirror — but the shared
+    # frontend applies one (golferSide negates offset_mm to get the golfer's
+    # side). Pre-invert here so a PUSH (ball right of the line) reads as "right"
+    # in the UI, matching the stored direction. Invert the per-sensor offsets
+    # identically so every stored offset shares one sign convention.
+    offset_mm = -offset_mm
+    if sensors is not None:
+        sensors = [None if v is None else -v for v in sensors]
+
     session = await run_in_threadpool(
-        ingest_device_putt, uid, session_id, putt_index, offset_mm, direction, speed_mps
+        ingest_device_putt, uid, session_id, putt_index, offset_mm, direction,
+        speed_mps, sensors,
     )
     if session is None:
         raise HTTPException(status_code=503, detail="Persistence is not configured.")

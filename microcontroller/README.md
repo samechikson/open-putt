@@ -51,8 +51,8 @@ pins (0, 2, 5, 12, 15) for buttons.
 
 ## The measurement (geometry + math)
 
-- Sensor face → far wall of the gate ≈ **170 mm**; center line measured at **80 mm**
-  on the current mount (earlier mounts read 85 and 89 mm — it's a per-mount constant).
+- Sensor face → far wall of the gate ≈ **170 mm**; center line measured at **89 mm**
+  on the current mount (was 85 mm on the original mount — it's a per-mount constant).
 - A ToF sensor reads the distance to the ball's **near surface**, not its center.
   A standard golf ball is ⌀**42.67 mm** (radius **21.335 mm**).
 - **Offset from center:**

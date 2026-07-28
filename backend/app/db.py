@@ -18,6 +18,7 @@ working without a DB).
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -47,7 +48,7 @@ _SESSION_COLS = (
 )
 _PUTT_COLS = (
     "putt_index, start_s, end_s, offset_mm, direction, speed_mps, track_count, "
-    "crossing_frame"
+    "crossing_frame, sensor_offsets_mm"
 )
 _PUTTER_COLS = (
     "id, name, brand, model, length_in, lie_deg, grip, is_active"
@@ -314,16 +315,17 @@ def ingest_device_putt(
     offset_mm: float,
     direction: str,
     speed_mps: Optional[float] = None,
+    sensor_offsets: Optional[list] = None,
 ) -> Optional[str]:
     """Record one putt measured by the hardware gate, upserting its session.
 
     Unlike the video pipeline, the device has already done the analysis: there's
-    no clip, calibration, or fps — just a measured offset, side, and (when the
-    ball tripped more than one sensor) speed. The first putt of a session creates
-    the (video-less, already-`done`) row; each putt upserts into it, so a dropped
-    connection costs at most one putt and a retry is idempotent (unique on
-    session_id + putt_index). `putt_count` is kept in sync with the actual rows.
-    No-op / None when persistence is disabled.
+    no clip, calibration, or fps — just a measured offset, side, (when the ball
+    tripped more than one sensor) speed, and the per-sensor offsets behind that
+    average. The first putt of a session creates the (video-less, already-`done`)
+    row; each putt upserts into it, so a dropped connection costs at most one putt
+    and a retry is idempotent (unique on session_id + putt_index). `putt_count` is
+    kept in sync with the actual rows. No-op / None when persistence is disabled.
     """
     pool = _get_pool()
     if pool is None:
@@ -341,14 +343,19 @@ def ingest_device_putt(
         )
         cur.execute(
             """
-            insert into putts (session_id, putt_index, offset_mm, direction, speed_mps)
-            values (%s::uuid, %s, %s, %s::putt_direction, %s)
+            insert into putts
+              (session_id, putt_index, offset_mm, direction, speed_mps, sensor_offsets_mm)
+            values (%s::uuid, %s, %s, %s::putt_direction, %s, %s::jsonb)
             on conflict (session_id, putt_index) do update set
               offset_mm = excluded.offset_mm,
               direction = excluded.direction,
-              speed_mps = excluded.speed_mps
+              speed_mps = excluded.speed_mps,
+              sensor_offsets_mm = excluded.sensor_offsets_mm
             """,
-            (session_id, putt_index, offset_mm, direction, speed_mps),
+            (
+                session_id, putt_index, offset_mm, direction, speed_mps,
+                json.dumps(sensor_offsets) if sensor_offsets is not None else None,
+            ),
         )
         cur.execute(
             "update sessions set putt_count = "
