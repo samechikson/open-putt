@@ -21,9 +21,12 @@ const int     N = 3;
 const int      LASER_PIN        = 26;
 const int      LASER_FLASH_COUNT = 3;         // blinks that confirm a captured putt
 const uint32_t LASER_FLASH_MS    = 120;       // on/off half-period of each blink
-const float    CENTER_MM        = 89.0;       // measured center distance (this mount)
-const float    BALL_DIAMETER_MM = 42.67;      // standard golf ball
-const float    BALL_RADIUS_MM   = BALL_DIAMETER_MM / 2.0;
+// Per-sensor raw reading (mm) with a ball rolled dead-center through the gate,
+// measured with the centering jig. The offset is the deviation from this, so a
+// center hit reads ~0 and each sensor's fixed bias — mounting differences and the
+// middle sensor's crosstalk offset — is absorbed. Re-measure if the mount changes.
+// Order matches CHANNELS {ch0, ch7, ch4} = Sensor 1, 2, 3.
+const float    CENTER_READING[N] = {72.2, 77.2, 70.0};
 const float    DETECT_MARGIN_MM = 25.0;       // drop below baseline = ball present
 const float    DEAD_BAND_MM     = 2.0;        // |offset| within this -> CENTER
 const uint32_t CLEAR_TIMEOUT_MS = 150;        // gate clear this long -> finalize
@@ -49,6 +52,10 @@ bool     eventActive = false;
 uint32_t lastSeen    = 0;
 float    minReading[N];       // -1 = sensor hasn't seen the ball this event
 uint32_t minReadingTime[N];   // millis() at each sensor's closest approach (for speed)
+float    maxReading[N];       // farthest ball-present reading this event (diagnostic)
+int      sampleCount[N];      // how many ball-present samples this sensor took (diagnostic)
+const int MAX_SAMPLES = 128;  // cap on stored per-sensor samples per putt (diagnostic)
+float    samples[N][MAX_SAMPLES];  // raw ball-present readings, in capture order
 int      puttNum     = 0;
 
 // One session per boot; every putt this power-cycle is grouped under it.
@@ -114,10 +121,23 @@ void classify(float offset, const char **label, float *mag) {
   else                        { *label = "CENTER"; *mag = fabs(o); }
 }
 
+// Closest-approach distance for sensor i, ignoring the first and last samples.
+// Those are the ball caught off-axis at the edge of the ~18° cone, so they read
+// long; the true perpendicular distance is the lowest of the middle samples.
+// Falls back to the overall min when there are too few samples to trim safely.
+float closestMiddle(int i) {
+  int n = sampleCount[i];
+  if (n < 3 || n > MAX_SAMPLES) return minReading[i];
+  float m = samples[i][1];
+  for (int k = 2; k < n - 1; k++) if (samples[i][k] < m) m = samples[i][k];
+  return m;
+}
+
 void report() {
   puttNum++;
   Serial.print("\n--- Putt #"); Serial.print(puttNum); Serial.println(" ---");
   float sum = 0;
+  float sumReading = 0;
   int count = 0;
   for (int i = 0; i < N; i++) {
     Serial.print("  Sensor "); Serial.print(i + 1);
@@ -126,21 +146,41 @@ void report() {
       Serial.println("no detection");
       continue;
     }
-    float offset = (minReading[i] + BALL_RADIUS_MM) - CENTER_MM;
+    float closest = closestMiddle(i);   // lowest of the middle samples (drop first/last)
+    float offset = closest - CENTER_READING[i];   // deviation from this sensor's center
     const char *label;
     float mag;
     classify(offset, &label, &mag);
     sum += offset;
+    sumReading += closest;
     count++;
+    // Full spread for diagnosis, then the value actually used (trimmed closest
+    // approach) and the offset it maps to.
+    Serial.print("min "); Serial.print(minReading[i], 1);
+    Serial.print(" / max "); Serial.print(maxReading[i], 1);
+    Serial.print(" mm ("); Serial.print(sampleCount[i]); Serial.print(" samples), used ");
+    Serial.print(closest, 1); Serial.print(" mm  ->  ");
     Serial.print(offset >= 0 ? "+" : "-");
     Serial.print(mag, 1); Serial.print(" mm  "); Serial.println(label);
+
+    // Full per-sample trace of the pass (capture order), for diagnosis.
+    Serial.print("      samples: ");
+    int shown = sampleCount[i] < MAX_SAMPLES ? sampleCount[i] : MAX_SAMPLES;
+    for (int k = 0; k < shown; k++) {
+      if (k) Serial.print(' ');
+      Serial.print(samples[i][k], 0);
+    }
+    if (sampleCount[i] > MAX_SAMPLES) Serial.print(" ...(capped)");
+    Serial.println();
   }
   if (count > 0) {
     float avg = sum / count;
     const char *label;
     float mag;
     classify(avg, &label, &mag);
-    Serial.print("  Average:        ");
+    Serial.print("  Avg reading:    ");
+    Serial.print(sumReading / count, 1); Serial.println(" mm");
+    Serial.print("  Avg offset:     ");
     Serial.print(avg >= 0 ? "+" : "-");
     Serial.print(mag, 1); Serial.print(" mm  "); Serial.println(label);
 
@@ -180,7 +220,7 @@ void report() {
       if (i) json += ",";
       json += (minReading[i] < 0)
         ? "null"
-        : String((minReading[i] + BALL_RADIUS_MM) - CENTER_MM, 1);
+        : String(closestMiddle(i) - CENTER_READING[i], 1);
     }
     json += "]}";
     int code = postPutt(json);
@@ -190,7 +230,11 @@ void report() {
 
 void resetEvent() {
   eventActive = false;
-  for (int i = 0; i < N; i++) minReading[i] = -1;
+  for (int i = 0; i < N; i++) {
+    minReading[i] = -1;
+    maxReading[i] = -1;
+    sampleCount[i] = 0;
+  }
 }
 
 // Blink the gate laser a few times to confirm a putt was successfully sent to the
@@ -320,6 +364,9 @@ void loop() {
     if (d > 0 && d < threshold[i]) {              // ball in this beam
       eventActive = true;
       lastSeen = now;
+      if (sampleCount[i] < MAX_SAMPLES) samples[i][sampleCount[i]] = d;  // keep the trace
+      sampleCount[i]++;
+      if (d > maxReading[i]) maxReading[i] = d;       // spread of ball-present samples
       if (minReading[i] < 0 || d < minReading[i]) {  // closest approach
         minReading[i] = d;
         minReadingTime[i] = now;                     // when the ball was nearest this sensor

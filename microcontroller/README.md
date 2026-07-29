@@ -51,15 +51,19 @@ pins (0, 2, 5, 12, 15) for buttons.
 
 ## The measurement (geometry + math)
 
-- Sensor face → far wall of the gate ≈ **170 mm**; center line measured at **89 mm**
-  on the current mount (was 85 mm on the original mount — it's a per-mount constant).
+- Sensor face → far wall of the gate ≈ **170 mm**; a centered ball's near surface
+  reads ~**70–77 mm** depending on the sensor.
 - A ToF sensor reads the distance to the ball's **near surface**, not its center.
   A standard golf ball is ⌀**42.67 mm** (radius **21.335 mm**).
-- **Offset from center:**
-  `offset_mm = (surface_reading_mm + BALL_RADIUS_MM) − CENTER_MM`
+- **Per-sensor calibration.** Rather than a shared geometric reference, each sensor
+  stores `CENTER_READING[i]` — what it reads for a ball rolled dead-center through
+  the gate (measured with a centering jig). The offset is the deviation from that:
+  `offset_mm = closest_reading_mm − CENTER_READING[i]`
   - `> 0` → **PUSH**, `< 0` → **PULL**, within a small dead-band → **CENTER**
-- A centered ball therefore correctly reports ~0 (the radius cancels the reference).
-  Usable range is roughly ±64 mm before the ball touches a wall.
+- This zeroes a center hit and absorbs each sensor's fixed bias — mounting
+  differences and the middle sensor's crosstalk offset — in one step, so there's no
+  single `CENTER_MM` or ball-radius term to tune. Re-measure `CENTER_READING` if the
+  mount changes. Usable range is roughly ±64 mm before the ball touches a wall.
 
 ### Detection algorithm
 
@@ -67,14 +71,16 @@ pins (0, 2, 5, 12, 15) for buttons.
    ~170–180 mm).
 2. A **ball is present** on a channel when its reading drops ≥ **25 mm** below that
    channel's baseline.
-3. Capture the **minimum** reading per sensor during the pass = the ball's closest
-   (perpendicular) approach = its true lateral distance.
+3. Capture the **closest approach** per sensor during the pass — the lowest of the
+   *middle* samples (the first/last are the ball caught off-axis at the edge of the
+   ~18° cone, so they read long and are dropped) = its true lateral distance.
 4. **Finalize** once the gate has been clear for 150 ms; compute per-sensor offset +
    an average, print PUSH/PULL.
 
-Tuning knobs live as constants at the top of the sketch: `CENTER_MM`,
-`BALL_DIAMETER_MM`, `DETECT_MARGIN_MM`, `DEAD_BAND_MM`, `CLEAR_TIMEOUT_MS`,
-`INVERT_PUSH_PULL` (flip if push/pull come out mirrored for your sensor side).
+Tuning knobs live as constants at the top of the sketch: `CENTER_READING[]`
+(per-sensor center calibration), `DETECT_MARGIN_MM`, `DEAD_BAND_MM`,
+`CLEAR_TIMEOUT_MS`, `SENSOR_SPACING_MM` (for speed), `INVERT_PUSH_PULL` (flip if
+push/pull come out mirrored for your sensor side).
 
 ---
 
@@ -131,4 +137,6 @@ arduino-cli monitor -p /dev/cu.usbserial-0001 -c baudrate=115200
 - **ESP32 serial quirks:** the boot-ROM prints at **74880 baud** (looks like garbage at
   115200 — ignore it), and the board **auto-resets when the serial port is opened**, which
   makes scripted/headless serial capture flaky. Use `arduino-cli monitor` interactively.
-- **Ball-radius correction is essential** — without it a centered putt mis-reads by ~21 mm.
+- **Per-sensor center calibration beats a shared geometric model** — the sensors differ
+  enough (mounting + optical crosstalk on the middle one) that a single `CENTER_MM` left
+  a consistent multi-mm bias. Zeroing each sensor against a dead-center ball fixes it.
