@@ -9,6 +9,7 @@ struct PuttingGateApp: App {
     @StateObject private var settings: AppSettings
     @StateObject private var coordinator: RecordingCoordinator
     @StateObject private var auth: AuthManager
+    @StateObject private var gate: GateConnection
 
     init() {
         // Must run before any Firebase API (AuthManager below). Reads
@@ -31,9 +32,12 @@ struct PuttingGateApp: App {
             recorder: recorder, uploads: uploads, modelContainer: container
         )
 
+        let gate = GateConnection(settings: settings, auth: auth)
+
         _settings = StateObject(wrappedValue: settings)
         _coordinator = StateObject(wrappedValue: coordinator)
         _auth = StateObject(wrappedValue: auth)
+        _gate = StateObject(wrappedValue: gate)
     }
 
     var body: some Scene {
@@ -43,6 +47,7 @@ struct PuttingGateApp: App {
                 .environmentObject(coordinator)
                 .environmentObject(coordinator.recorder)
                 .environmentObject(auth)
+                .environmentObject(gate)
                 .modelContainer(modelContainer)
         }
     }
@@ -72,6 +77,8 @@ struct MainTabView: View {
         TabView {
             RecordView()
                 .tabItem { Label("Record", systemImage: "video.fill") }
+            GateView()
+                .tabItem { Label("Gate", systemImage: "sensor.tag.radiowaves.forward.fill") }
             HistoryView()
                 .tabItem { Label("History", systemImage: "list.bullet") }
             SettingsView()

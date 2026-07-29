@@ -41,7 +41,7 @@ from .db import (
     set_active_putter,
     ingest_device_putt,
 )
-from .auth import require_user, require_device
+from .auth import require_user, require_device, require_user_or_device
 from . import cloud
 
 logger = logging.getLogger(__name__)
@@ -569,7 +569,9 @@ async def calibration_check(
     return JSONResponse(result)
 
 
-# MARK: Device ingestion (hardware gate; secret-authenticated, no video)
+# MARK: Device ingestion (hardware gate; no video). Authenticated as either the
+# signed-in user (the iOS app relaying the gate's putts over BLE) or the device
+# itself (legacy ESP32 direct POST with X-Device-Token).
 
 # The gate reports PUSH (past center) / PULL (short of center); map those to the
 # app's putt_direction sides. Flip on the device (INVERT_PUSH_PULL) if a side
@@ -578,7 +580,7 @@ _LABEL_TO_DIRECTION = {"PUSH": "right", "PULL": "left", "CENTER": "center"}
 
 
 @app.post("/device/putts", status_code=201)
-async def device_putt(request: Request, uid: str = Depends(require_device)):
+async def device_putt(request: Request, uid: str = Depends(require_user_or_device)):
     """Ingest one pre-measured putt from the hardware gate.
 
     Body: `{session_id, putt_index, offset_mm, label, speed_mps?, sensors?}`. The device has

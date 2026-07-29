@@ -26,6 +26,10 @@ final class AppSettings: ObservableObject {
     /// Endpoint listing the user's putters (active first), for tagging a session.
     var puttersURL: URL? { URL(string: Self.backendBaseURL + "/putters") }
 
+    /// Endpoint that ingests one pre-measured putt from the hardware gate,
+    /// relayed by the app over BLE under the user's login.
+    var devicePuttsURL: URL? { URL(string: Self.backendBaseURL + "/device/putts") }
+
     // MARK: Capture
 
     /// Capture/record resolution.

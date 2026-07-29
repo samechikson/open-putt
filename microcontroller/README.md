@@ -13,7 +13,9 @@ a Raspberry Pi, then migrated to an ESP32 for portability.
 - ✅ **3× VL53L4CD** distance sensors read through an I2C multiplexer
 - ✅ **Putt detection + push/pull offset** working standalone on the ESP32 (verified:
   a real putt reported a consistent ~+43 mm PUSH across all three sensors)
-- ⏳ **WiFi POST to a backend** — designed but not yet implemented (see "Next steps")
+- ✅ **Per-sensor speed + center calibration** (per-sensor `CENTER_READING`, jig-measured)
+- ✅ **BLE to the phone** — each putt is sent over BLE to the iOS app, which relays it to
+  the backend under the signed-in user (no WiFi/hotspot on the ESP32). See "Transport".
 
 ---
 
@@ -102,12 +104,13 @@ Uses `arduino-cli` (installed via Homebrew).
 
 - ESP32 core: `esp32:esp32` **3.3.11**
 - Library: **STM32duino VL53L4CD** 1.0.5 (`arduino-cli lib install "STM32duino VL53L4CD"`)
-- Board FQBN: `esp32:esp32:esp32`
+- Board FQBN: `esp32:esp32:esp32:PartitionScheme=huge_app` (the `huge_app` partition is
+  required — BLE overflows the default 1.3 MB app partition)
 - Serial port (this Mac): `/dev/cu.usbserial-0001`
 
 ```bash
 # compile + upload (from a sketch folder)
-arduino-cli compile --fqbn esp32:esp32:esp32 --upload -p /dev/cu.usbserial-0001 .
+arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=huge_app --upload -p /dev/cu.usbserial-0001 .
 
 # watch serial output (Ctrl-C to quit)
 arduino-cli monitor -p /dev/cu.usbserial-0001 -c baudrate=115200
@@ -115,18 +118,26 @@ arduino-cli monitor -p /dev/cu.usbserial-0001 -c baudrate=115200
 
 ---
 
-## Next steps
+## Transport (BLE → phone → backend)
 
-1. **WiFi POST (step 4).** Add `WiFi.begin()` + an HTTP `POST` of each putt's JSON in
-   `report()`. Plan:
-   - Credentials + backend URL in a separate `secrets.h` (gitignored).
-   - Payload shape: `{ "putt": N, "avg_offset_mm": X, "label": "PUSH", "sensors": [...] }`
-   - Connect to a **phone hotspot** for field use. **iPhone: enable Personal Hotspot →
-     "Maximize Compatibility"** so it broadcasts 2.4 GHz (the ESP32 can't see 5 GHz).
-   - Prove the pipeline against a free endpoint (e.g. webhook.site) before pointing at
-     the real backend.
-2. **Later / optional:** BLE-to-phone relay; a physical on/off (latching button on the
-   ESP32 `EN` pin); a transistor to drive the laser cleanly; deep-sleep + button wake.
+The ESP32 has **no WiFi**. It advertises over BLE as **`PuttingGate`** and sends each
+finalized putt as a notification; the iOS app (a BLE central) receives it and relays it
+to `POST /api/device/putts` under the signed-in user's Firebase login. This means no
+hotspot, no WiFi credentials, and putts are attributed to the real user.
+
+- Service UUID `6b1a0001-8c2f-4d3a-9e5b-1f2c3d4e5f60`, notify characteristic
+  `6b1a0002-…` — these must match the iOS app (`GateConnection.swift`).
+- Payload (UTF-8 JSON, fits one BLE notification):
+  `{ "session_id", "putt_index", "offset_mm", "label", "speed_mps", "sensors": [...] }`.
+- The laser flashes only when a phone is connected and received the notification.
+- **BLE needs the bigger app partition** — build with
+  `--fqbn esp32:esp32:esp32:PartitionScheme=huge_app` (BLE overflows the default).
+
+### Next steps
+
+- **Later / optional:** a physical on/off (latching button on the `EN` pin); a
+  transistor to drive the laser cleanly; deep-sleep + button wake; a BLE write
+  characteristic so the phone can confirm a *backend*-accepted putt (flash on 201).
 
 ---
 

@@ -2,16 +2,17 @@
 //   Laser  red (+) -> GPIO26, black (-) -> GND
 //   Mux    SDA -> GPIO21, SCL -> GPIO22, VIN -> 3V3, GND -> GND
 //   3x VL53L4CD on mux channels 0, 7, 4 (Sensor 1, 2, 3)
-// Turns the laser on, calibrates the empty gate, then reports each putt's
-// offset from center as PUSH (past center) / PULL (short of center).
+// Turns the laser on, calibrates the empty gate, then reports each putt's offset
+// from center as PUSH (past center) / PULL (short of center) and sends it over
+// BLE to the phone app, which relays it to the backend under the user's login.
 
 #include <Wire.h>
 #include <math.h>
 #include <vl53l4cd_class.h>
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include <WiFiClientSecure.h>
-#include "secrets.h"
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 
 // ---------- Tuning constants (ported from putt_tracker.py) ----------
 #define MUX_ADDR 0x70
@@ -60,6 +61,28 @@ int      puttNum     = 0;
 
 // One session per boot; every putt this power-cycle is grouped under it.
 String   sessionId;
+
+// ---------- BLE (putts are sent to the phone app, which relays them) ----------
+// Custom 128-bit UUIDs; must match the iOS app (GateConnection).
+#define SERVICE_UUID        "6b1a0001-8c2f-4d3a-9e5b-1f2c3d4e5f60"
+#define CHARACTERISTIC_UUID "6b1a0002-8c2f-4d3a-9e5b-1f2c3d4e5f60"
+
+BLECharacteristic *puttChar = nullptr;
+bool centralConnected = false;   // a phone is connected (and can receive notifies)
+
+// Track connect/disconnect so we only flash the laser when a phone is listening,
+// and re-advertise after a disconnect so it can reconnect.
+class ServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer *s) override {
+    centralConnected = true;
+    Serial.println("BLE: phone connected");
+  }
+  void onDisconnect(BLEServer *s) override {
+    centralConnected = false;
+    Serial.println("BLE: phone disconnected, re-advertising");
+    BLEDevice::startAdvertising();
+  }
+};
 
 void muxSelect(uint8_t ch) {
   Wire.beginTransmission(MUX_ADDR);
@@ -205,10 +228,10 @@ void report() {
       }
     }
 
-    // Build the putt payload and POST it. Per-sensor entries are the signed
-    // offset (or null where that sensor didn't see the ball); speed_mps is null
-    // when the ball tripped fewer than two sensors. Matches the backend's
-    // POST /api/device/putts body.
+    // Build the putt payload and send it to the phone over BLE. Per-sensor
+    // entries are the signed offset (or null where that sensor didn't see the
+    // ball); speed_mps is null when the ball tripped fewer than two sensors.
+    // The phone relays this JSON verbatim to POST /api/device/putts.
     String json = "{";
     json += "\"session_id\":\"" + sessionId + "\",";
     json += "\"putt_index\":" + String(puttNum) + ",";
@@ -223,8 +246,7 @@ void report() {
         : String(closestMiddle(i) - CENTER_READING[i], 1);
     }
     json += "]}";
-    int code = postPutt(json);
-    if (code >= 200 && code < 300) flashLaser();   // confirm only a successful send
+    if (notifyPutt(json)) flashLaser();   // confirm only when a phone received it
   }
 }
 
@@ -237,10 +259,9 @@ void resetEvent() {
   }
 }
 
-// Blink the gate laser a few times to confirm a putt was successfully sent to the
-// backend, then leave it on (it's the aiming reference for the next putt).
-// Detection uses the ToF sensors, not the laser, so blinking it doesn't affect
-// measurement.
+// Blink the gate laser a few times to confirm a putt was received by the phone,
+// then leave it on (it's the aiming reference for the next putt). Detection uses
+// the ToF sensors, not the laser, so blinking it doesn't affect measurement.
 void flashLaser() {
   for (int i = 0; i < LASER_FLASH_COUNT; i++) {
     digitalWrite(LASER_PIN, LOW);
@@ -252,7 +273,7 @@ void flashLaser() {
 
 // A canonical UUID (8-4-4-4-12 hex) for this session. The backend stores it as
 // sessions.id (a uuid column), so it must be UUID-shaped. Randomness comes from
-// esp_random() (hardware RNG, seeded once WiFi/RF is up).
+// esp_random() (hardware RNG, seeded once the BLE radio is up).
 String makeSessionId() {
   uint8_t b[16];
   for (int i = 0; i < 16; i += 4) {
@@ -269,57 +290,43 @@ String makeSessionId() {
   return String(buf);
 }
 
-// On a failed connect, list the 2.4 GHz networks the ESP32 can actually see.
-// If the target SSID is here, the password is wrong; if it's absent, the hotspot
-// is 5 GHz-only (enable "Maximize Compatibility") or asleep.
-void scanNetworks() {
-  Serial.println("WiFi: scanning for visible 2.4 GHz networks...");
-  int n = WiFi.scanNetworks();
-  if (n <= 0) {
-    Serial.println("  (none found — no 2.4 GHz network in range)");
-  } else {
-    for (int i = 0; i < n; i++) {
-      Serial.print("  '"); Serial.print(WiFi.SSID(i));
-      Serial.print("'  RSSI="); Serial.print(WiFi.RSSI(i));
-      Serial.println(WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "  (open)" : "  (secured)");
-    }
-  }
-  WiFi.scanDelete();
+// Bring up the BLE peripheral: one service with a notify characteristic that
+// carries each putt's JSON. Advertises as "PuttingGate" so the phone app can
+// find and connect to it.
+void startBLE() {
+  BLEDevice::init("PuttingGate");
+  BLEServer *server = BLEDevice::createServer();
+  server->setCallbacks(new ServerCallbacks());
+  BLEService *service = server->createService(SERVICE_UUID);
+  puttChar = service->createCharacteristic(
+    CHARACTERISTIC_UUID, BLECharacteristic::PROPERTY_NOTIFY);
+  puttChar->addDescriptor(new BLE2902());   // lets the phone subscribe to notifies
+  service->start();
+
+  BLEAdvertising *adv = BLEDevice::getAdvertising();
+  // The 128-bit service UUID (16 bytes) and the "PuttingGate" name together
+  // overflow the 31-byte advertising packet, which would silently drop the UUID
+  // and make iOS's UUID-filtered scan miss the gate. Put the UUID in the primary
+  // advertisement and the name in the scan response so both fit.
+  BLEAdvertisementData advData;
+  advData.setFlags(0x06);   // LE General Discoverable + BR/EDR not supported
+  advData.setCompleteServices(BLEUUID(SERVICE_UUID));
+  BLEAdvertisementData scanResp;
+  scanResp.setName("PuttingGate");
+  adv->setAdvertisementData(advData);
+  adv->setScanResponseData(scanResp);
+  BLEDevice::startAdvertising();
+  Serial.println("BLE: advertising as 'PuttingGate'");
 }
 
-void connectWiFi() {
-  Serial.print("WiFi: connecting to '"); Serial.print(WIFI_SSID); Serial.println("'");
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect(true);          // clear any stale association from a prior boot
-  delay(100);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  uint32_t start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
-    delay(250); Serial.print(".");
-  }
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("\nWiFi: connected, IP "); Serial.println(WiFi.localIP());
-  } else {
-    Serial.print("\nWiFi: FAILED (status="); Serial.print(WiFi.status());
-    Serial.println(", keeping detection running offline).");
-    scanNetworks();               // show what's actually visible to bisect the cause
-  }
-}
-
-// POST one putt as JSON. Returns the HTTP status, or -1 on transport failure.
-// Never blocks detection: a failure just logs and the next putt still runs.
-int postPutt(const String &json) {
-  if (WiFi.status() != WL_CONNECTED) return -1;
-  WiFiClientSecure client;
-  client.setInsecure();                 // skip cert validation — fine for a hobby device
-  HTTPClient http;
-  if (!http.begin(client, POST_URL)) return -1;
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("X-Device-Token", DEVICE_TOKEN);   // ignored by webhook.site
-  int code = http.POST(json);
-  Serial.print("POST -> "); Serial.println(code);
-  http.end();
-  return code;
+// Send one putt's JSON to the connected phone as a BLE notification. Returns
+// false (no-op) when no phone is connected — detection keeps running either way.
+bool notifyPutt(const String &json) {
+  if (!centralConnected || puttChar == nullptr) return false;
+  puttChar->setValue((uint8_t *)json.c_str(), json.length());
+  puttChar->notify();
+  Serial.println("BLE: putt sent");
+  return true;
 }
 
 void setup() {
@@ -347,7 +354,7 @@ void setup() {
     Serial.print("  ch"); Serial.print(CHANNELS[i]); Serial.println(": OK");
   }
 
-  connectWiFi();
+  startBLE();
   sessionId = makeSessionId();
   Serial.print("Session: "); Serial.println(sessionId);
 
@@ -374,7 +381,7 @@ void loop() {
     }
   }
   if (eventActive && (now - lastSeen) > CLEAR_TIMEOUT_MS) {
-    report();         // print + POST; flashes the laser only if the POST succeeds
+    report();         // print + BLE notify; flashes the laser if a phone received it
     resetEvent();
   }
 }

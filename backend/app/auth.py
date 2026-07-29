@@ -95,3 +95,23 @@ def require_device(x_device_token: Optional[str] = Header(default=None)) -> str:
     if not x_device_token or not hmac.compare_digest(x_device_token, expected):
         raise HTTPException(status_code=401, detail="Invalid device token.")
     return uid
+
+
+def require_user_or_device(
+    authorization: Optional[str] = Header(default=None),
+    x_device_token: Optional[str] = Header(default=None),
+) -> str:
+    """Return the UID for an ingest call authenticated as *either* a signed-in
+    user or the hardware device.
+
+    The iOS app relays the gate's putts under the user's Firebase login (a Bearer
+    token), so they're attributed to the real user. The legacy path — the ESP32
+    POSTing directly with its shared `X-Device-Token` — still works. A Bearer
+    header wins when present (and is verified strictly); otherwise the device
+    secret is checked.
+    """
+    if authorization:
+        return require_user(authorization)
+    if x_device_token:
+        return require_device(x_device_token)
+    raise HTTPException(status_code=401, detail="Missing credentials.")
