@@ -4,6 +4,7 @@ import {
   fetchPutts,
   fetchSessionVideoUrl,
   fetchPuttFrameUrl,
+  fetchPuttVideoUrl,
   deleteSession,
   reanalyzeSession,
   updateSession,
@@ -48,6 +49,10 @@ export default function SessionDetail({
   const [frameLoading, setFrameLoading] = useState(false);
   const [frameError, setFrameError] = useState<string | null>(null);
   const frameUrlRef = useRef<string | null>(null);
+  // Per-putt review clip (hardware-gate putts). A signed URL played directly, so
+  // no object URL to revoke — unlike the crossing still.
+  const [puttVideoUrl, setPuttVideoUrl] = useState<string | null>(null);
+  const [puttVideoLoading, setPuttVideoLoading] = useState(false);
   // Bumped on every selection so a slow in-flight fetch for a previous putt
   // can't overwrite the current one.
   const frameReqRef = useRef(0);
@@ -65,6 +70,26 @@ export default function SessionDetail({
     const req = ++frameReqRef.current;
     setFrame(null);
     setFrameError(null);
+    setPuttVideoUrl(null);
+
+    // Hardware-gate putts carry their own review clip; prefer it over a still.
+    if (p.video_path != null) {
+      setFrameLoading(false);
+      setPuttVideoLoading(true);
+      fetchPuttVideoUrl(sessionId, p.putt_index)
+        .then((url) => {
+          if (req !== frameReqRef.current) return; // superseded
+          setPuttVideoUrl(url);
+          setPuttVideoLoading(false);
+        })
+        .catch(() => {
+          if (req !== frameReqRef.current) return;
+          setPuttVideoLoading(false);
+        });
+      return;
+    }
+
+    setPuttVideoLoading(false);
     if (p.crossing_frame == null) {
       setFrameLoading(false);
       return;
@@ -610,7 +635,7 @@ export default function SessionDetail({
                           }`}
                         >
                           <td className="px-4 py-3 text-[#aaa]">
-                            {videoUrl && (
+                            {(videoUrl || p.video_path) && (
                               <span className="text-[#22c55e] mr-1">▶</span>
                             )}
                             {p.putt_index + 1}
@@ -656,16 +681,30 @@ export default function SessionDetail({
 
               <div className="lg:w-80 shrink-0 bg-[#1a1a1a] border border-[#333] rounded-xl p-4">
                 <h3 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-3">
-                  Crossing frame
+                  {selectedPutt && (puttVideoUrl || puttVideoLoading)
+                    ? "Review clip"
+                    : "Crossing frame"}
                 </h3>
                 {selectedPutt == null ? (
                   <p className="text-sm text-[#666]">
-                    Select a putt to see where it crossed the gate.
+                    Select a putt to see its footage.
                   </p>
-                ) : frameLoading ? (
+                ) : puttVideoLoading || frameLoading ? (
                   <div className="flex items-center gap-2 text-sm text-[#888]">
                     <span className="w-3.5 h-3.5 border-2 border-[#22c55e] border-t-transparent rounded-full animate-spin" />
-                    Loading frame…
+                    Loading…
+                  </div>
+                ) : puttVideoUrl ? (
+                  <div>
+                    <video
+                      src={puttVideoUrl}
+                      controls
+                      playsInline
+                      className="w-full rounded-lg bg-black"
+                    />
+                    <p className="text-xs text-[#666] mt-2">
+                      Putt {selectedPutt.putt_index + 1} · last 2s before the gate
+                    </p>
                   </div>
                 ) : frameUrl ? (
                   <div>
@@ -681,9 +720,9 @@ export default function SessionDetail({
                 ) : frameError ? (
                   <p className="text-sm text-[#f87171]">{frameError}</p>
                 ) : (
-                  // Legacy putt with no stored crossing frame: show nothing.
+                  // Putt with no stored footage (legacy still or no clip yet).
                   <p className="text-sm text-[#666]">
-                    Select a putt to see where it crossed the gate.
+                    No footage for this putt.
                   </p>
                 )}
               </div>

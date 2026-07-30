@@ -128,6 +128,7 @@ create table if not exists putts (
   crossing_y   double precision,                 -- from crossing_pos[1]
   crossing_frame int,                            -- source-frame index at the gate crossing
   sensor_offsets_mm jsonb,                        -- per-sensor offsets (hardware gate); null for video putts
+  video_path   text,                             -- per-putt review clip (hardware gate); null for video putts
   unique (session_id, putt_index)
 );
 

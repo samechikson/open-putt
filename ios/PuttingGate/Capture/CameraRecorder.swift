@@ -21,6 +21,10 @@ final class CameraRecorder: NSObject, ObservableObject {
 
     let captureSession = AVCaptureSession()
 
+    /// Rolling buffer of recent footage, fed every frame. The Gate flow toggles
+    /// it on/off (`start()`/`stop()`) and pulls the last ~2 s on each putt.
+    let preRoll = PreRollRecorder()
+
     private let settings: AppSettings
     private let sessionQueue = DispatchQueue(label: "com.puttinggate.capture")
     private let movieOutput = AVCaptureMovieFileOutput()
@@ -275,6 +279,10 @@ extension CameraRecorder: AVCaptureVideoDataOutputSampleBufferDelegate {
         frameLock.lock()
         latestSampleBuffer = sampleBuffer
         frameLock.unlock()
+
+        // Also feed the rolling pre-roll buffer (a no-op unless the Gate flow has
+        // started it), so a clip of the last ~2 s is available on a putt.
+        preRoll.append(sampleBuffer)
     }
 }
 

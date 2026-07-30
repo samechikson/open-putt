@@ -32,7 +32,7 @@ struct PuttingGateApp: App {
             recorder: recorder, uploads: uploads, modelContainer: container
         )
 
-        let gate = GateConnection(settings: settings, auth: auth)
+        let gate = GateConnection(settings: settings, auth: auth, preRoll: recorder.preRoll)
 
         _settings = StateObject(wrappedValue: settings)
         _coordinator = StateObject(wrappedValue: coordinator)

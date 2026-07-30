@@ -133,6 +133,21 @@ export async function fetchSessionVideoUrl(sessionId: string): Promise<string> {
   return url;
 }
 
+// Short-lived signed URL for one putt's review clip (hardware-gate putts). The
+// URL is playable directly in a <video> tag; only call when the putt has a
+// video_path.
+export async function fetchPuttVideoUrl(
+  sessionId: string,
+  puttIndex: number,
+): Promise<string> {
+  const { url } = await apiJson<{ url: string }>(
+    `/sessions/${sessionId}/putts/${puttIndex}/video`,
+    {},
+    "Could not load clip",
+  );
+  return url;
+}
+
 // Queue a Full Session video for background analysis. Uploads the video straight
 // to Cloud Storage via a signed URL (avoiding Cloud Run's request-size limit),
 // then starts analysis. Returns the session id; watch it via subscribeToSession
@@ -243,6 +258,9 @@ export interface PuttRow {
   // Per-sensor offsets from the hardware gate (device mounting order; null per
   // sensor that didn't see the ball). Null entirely for video-pipeline putts.
   sensor_offsets_mm: (number | null)[] | null;
+  // Retained path of this putt's review clip (hardware gate), or null. Presence
+  // means a per-putt video can be fetched via /sessions/:id/putts/:i/video.
+  video_path: string | null;
 }
 
 export async function fetchPutts(sessionId: string): Promise<PuttRow[]> {
