@@ -253,40 +253,99 @@ export async function fetchPutts(sessionId: string): Promise<PuttRow[]> {
   );
 }
 
-// Watch a session's putts by polling the backend (same push-less approach as
-// subscribeToSession — the database has no realtime channel). Fetches once
-// immediately, then polls, invoking onChange only when the putt set actually
-// changes (a new putt arrives, or an existing one's values update). Keeps
-// polling until unsubscribed, so it streams putts in as they're recorded during
-// a live session. Returns an unsubscribe function.
+// Parse one Server-Sent Events frame (fields separated by newlines) into its
+// event name and joined data. Comment lines (": …", used for heartbeats) and
+// dataless frames yield null.
+function parseSseFrame(
+  frame: string,
+): { event: string; data: string } | null {
+  let event = "message";
+  const dataLines: string[] = [];
+  for (const line of frame.split("\n")) {
+    if (line === "" || line.startsWith(":")) continue; // blank / comment
+    const colon = line.indexOf(":");
+    const field = colon === -1 ? line : line.slice(0, colon);
+    let value = colon === -1 ? "" : line.slice(colon + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "event") event = value;
+    else if (field === "data") dataLines.push(value);
+  }
+  if (dataLines.length === 0) return null;
+  return { event, data: dataLines.join("\n") };
+}
+
+// Watch a session's putts over a Server-Sent Events stream, invoking onChange
+// with the full putt list whenever it changes — so new putts appear live (the
+// hardware gate appends putts to an already-'done' session one at a time). The
+// backend holds one connection and pushes changes (see the /putts/stream
+// endpoint), replacing the client-side polling this used to do.
+//
+// We consume the stream with fetch (via apiFetch, so the Firebase Bearer token
+// is attached) rather than the native EventSource, which can't send an auth
+// header. A finalized session ends the stream cleanly ('complete'); any other
+// drop (a network blip on a live gate session) reconnects after a short delay.
+// Returns an unsubscribe function.
 export function subscribeToPutts(
   id: string,
   onChange: (rows: PuttRow[]) => void,
 ): () => void {
-  const POLL_MS = 2500;
+  const RETRY_MS = 3000;
   let cancelled = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let lastKey: string | undefined;
+  let controller: AbortController | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const tick = async () => {
-    try {
-      const rows = await fetchPutts(id);
-      if (cancelled) return;
-      const key = JSON.stringify(rows);
-      if (key !== lastKey) {
-        lastKey = key;
-        onChange(rows);
-      }
-    } catch {
-      // transient error; keep polling
-    }
-    if (!cancelled) timer = setTimeout(tick, POLL_MS);
+  const scheduleRetry = () => {
+    if (cancelled) return;
+    retryTimer = setTimeout(() => void connect(), RETRY_MS);
   };
-  void tick();
+
+  const connect = async () => {
+    if (cancelled) return;
+    controller = new AbortController();
+    // True once the server signals the stream is done (finalized session, or an
+    // error like not-found); tells us not to reconnect on the stream's end.
+    let done = false;
+    try {
+      const res = await apiFetch(`/sessions/${id}/putts/stream`, {
+        signal: controller.signal,
+        headers: { Accept: "text/event-stream" },
+      });
+      if (!res.ok || !res.body) throw new Error(`stream failed (${res.status})`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { value, done: streamDone } = await reader.read();
+        if (streamDone) break;
+        buffer += decoder.decode(value, { stream: true });
+        // Frames are delimited by a blank line; process each complete one.
+        let sep: number;
+        while ((sep = buffer.indexOf("\n\n")) !== -1) {
+          const evt = parseSseFrame(buffer.slice(0, sep));
+          buffer = buffer.slice(sep + 2);
+          if (!evt || cancelled) continue;
+          if (evt.event === "putts") {
+            onChange(JSON.parse(evt.data) as PuttRow[]);
+          } else if (evt.event === "complete" || evt.event === "error") {
+            done = true; // nothing more is coming; don't reconnect
+          }
+        }
+      }
+      if (!done) scheduleRetry(); // unexpected end of a live stream
+    } catch (e) {
+      if (cancelled || (e instanceof DOMException && e.name === "AbortError"))
+        return;
+      scheduleRetry();
+    }
+  };
+
+  void connect();
 
   return () => {
     cancelled = true;
-    if (timer) clearTimeout(timer);
+    if (retryTimer) clearTimeout(retryTimer);
+    controller?.abort();
   };
 }
 

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
   fetchSession,
-  fetchPutts,
   fetchSessionVideoUrl,
   fetchPuttFrameUrl,
   deleteSession,
@@ -122,17 +121,6 @@ export default function SessionDetail({
   useEffect(() => {
     let cancelled = false;
 
-    // When a session reaches 'done', pull its putts in.
-    const loadPutts = () => {
-      fetchPutts(sessionId)
-        .then((rows) => {
-          if (!cancelled) setPutts(rows);
-        })
-        .catch(() => {
-          /* putts are secondary; the status drives the UI */
-        });
-    };
-
     // Any session with a retained video (done, or errored after retention):
     // fetch a signed playback URL so the clip can be reviewed.
     const loadVideo = (row: SessionRow) => {
@@ -153,9 +141,6 @@ export default function SessionDetail({
           return;
         }
         setSession(row);
-        if (row.status === "done") {
-          loadPutts();
-        }
         loadVideo(row);
       })
       .catch((e: unknown) => {
@@ -165,12 +150,10 @@ export default function SessionDetail({
       });
 
     // Watch for background-analysis transitions (queued/processing → done/error).
+    // Putts themselves stream in separately (subscribeToPutts, below).
     const unsubscribe = subscribeToSession(sessionId, (row) => {
       if (cancelled) return;
       setSession(row);
-      if (row.status === "done") {
-        loadPutts();
-      }
       loadVideo(row);
     });
 
@@ -202,13 +185,12 @@ export default function SessionDetail({
   const status = session?.status;
   const pending = status === "queued" || status === "processing";
 
-  // Stream putts in as they're recorded. While the session is still active
-  // (queued/processing) new putts land in the table without a manual refresh;
-  // the authoritative final set is loaded again on the 'done' transition above.
-  useEffect(() => {
-    if (!pending) return;
-    return subscribeToPutts(sessionId, setPutts);
-  }, [sessionId, pending, reloadKey]);
+  // Stream putts in as they're recorded, so new ones appear without a refresh.
+  // Runs for every session (not just pending ones): a hardware-gate session is
+  // already 'done' while putts keep arriving over BLE, so gating on status would
+  // miss exactly the live case. The stream emits the current putts on connect
+  // and closes itself once the session can gain no more (see subscribeToPutts).
+  useEffect(() => subscribeToPutts(sessionId, setPutts), [sessionId, reloadKey]);
 
   const offsets = putts
     .map((p) => p.offset_mm)
