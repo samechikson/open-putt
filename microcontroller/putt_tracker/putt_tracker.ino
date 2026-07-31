@@ -157,6 +157,20 @@ float closestMiddle(int i) {
 }
 
 void report() {
+  // Only count a putt when every sensor saw the ball. A real putt rolls over all
+  // three in-line sensors in sequence; a partial detection (some sensor never
+  // saw it) is almost always an errant read — e.g. sunlight tripping a single
+  // sensor outdoors — so ignore it entirely: no putt number, no BLE notify, no
+  // laser flash.
+  int detected = 0;
+  for (int i = 0; i < N; i++) if (minReading[i] >= 0) detected++;
+  if (detected < N) {
+    Serial.print("Ignoring partial detection (");
+    Serial.print(detected); Serial.print("/"); Serial.print(N);
+    Serial.println(" sensors) - not counted as a putt.");
+    return;
+  }
+
   puttNum++;
   Serial.print("\n--- Putt #"); Serial.print(puttNum); Serial.println(" ---");
   float sum = 0;

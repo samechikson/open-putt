@@ -51,4 +51,14 @@ extension GatePutt {
 
     /// Absolute distance off center, in mm.
     var magnitudeMm: Double { abs(offsetMm) }
+
+    /// Whether every sensor saw the ball. A real putt rolls over all the in-line
+    /// sensors in sequence, so a complete `sensors` array (no missing readings)
+    /// is the mark of a genuine putt; a partial reading is almost always an
+    /// errant trip (e.g. sunlight outdoors) and is ignored. Mirrors the firmware
+    /// guard and the backend's `POST /api/device/putts` check.
+    var hasAllSensors: Bool {
+        guard let sensors, !sensors.isEmpty else { return false }
+        return !sensors.contains(where: { $0 == nil })
+    }
 }

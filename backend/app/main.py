@@ -584,11 +584,13 @@ _LABEL_TO_DIRECTION = {"PUSH": "right", "PULL": "left", "CENTER": "center"}
 async def device_putt(request: Request, uid: str = Depends(require_user_or_device)):
     """Ingest one pre-measured putt from the hardware gate.
 
-    Body: `{session_id, putt_index, offset_mm, label, speed_mps?, sensors?}`. The device has
+    Body: `{session_id, putt_index, offset_mm, label, speed_mps?, sensors}`. The device has
     already done the analysis, so there's no video or calibration — this upserts
     a video-less, already-`done` session and appends the putt. Idempotent per
     (session_id, putt_index), so the device can safely retry. `sensors` (the
-    per-sensor offsets) is accepted for forward-compat but not persisted yet.
+    per-sensor offsets) is required and must be complete: a putt is only counted
+    when every sensor saw the ball, so a partial reading (a missing per-sensor
+    value) is rejected as an errant trip rather than stored.
     """
     body = await request.json()
 
@@ -631,6 +633,18 @@ async def device_putt(request: Request, uid: str = Depends(require_user_or_devic
             sensors = [None if v is None else float(v) for v in sensors]
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="sensors must be numbers or null.")
+
+    # Only count a putt where every sensor saw the ball. A real putt rolls over
+    # all the in-line sensors; a partial reading (a missing per-sensor value, or
+    # no sensors at all) is almost always an errant trip — e.g. sunlight tripping
+    # a single sensor outdoors — so reject it rather than store a bogus putt. The
+    # firmware and the app apply the same guard, so this is a backstop for an
+    # old-firmware device or a direct post.
+    if not sensors or any(v is None for v in sensors):
+        raise HTTPException(
+            status_code=422,
+            detail="Putt ignored: not all sensors detected the ball.",
+        )
 
     # The device isn't a camera, so it has no face-on mirror — but the shared
     # frontend applies one (golferSide negates offset_mm to get the golfer's

@@ -206,6 +206,11 @@ extension GateConnection: CBCentralManagerDelegate, CBPeripheralDelegate {
         guard let data = characteristic.value,
               let putt = try? decoder.decode(GatePutt.self, from: data)
         else { return }
+        // Ignore errant reads: a real putt trips every sensor, so a partial
+        // reading (some sensor missing) is dropped here — not shown, not relayed,
+        // and never treated as the start of a session. Mirrors the firmware and
+        // backend guards.
+        guard putt.hasAllSensors else { return }
         // A putt bearing a session id we haven't seen marks a new session; tag it
         // (with the player's setup selection) once its first putt is relayed.
         let isNewSession = putt.sessionID != activeSessionId
