@@ -48,7 +48,7 @@ _SESSION_COLS = (
 )
 _PUTT_COLS = (
     "putt_index, start_s, end_s, offset_mm, direction, speed_mps, track_count, "
-    "crossing_frame, sensor_offsets_mm, video_path"
+    "crossing_frame, sensor_offsets_mm"
 )
 _PUTTER_COLS = (
     "id, name, brand, model, length_in, lie_deg, grip, is_active"
@@ -431,43 +431,6 @@ def get_putt_crossing_frame(
         )
         row = cur.fetchone()
         return row["crossing_frame"] if row else None
-
-
-def set_putt_video_path(
-    uid: str, session_id: str, putt_index: int, video_path: str
-) -> bool:
-    """Attach a retained review-clip path to one putt, if the session belongs to
-    `uid`. Returns True when a row was updated (the putt exists and is owned)."""
-    pool = _get_pool()
-    if pool is None:
-        return False
-    with pool.connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            "update putts set video_path = %s "
-            "where session_id = %s::uuid and putt_index = %s and exists ("
-            "  select 1 from sessions s where s.id = session_id and s.user_id = %s)",
-            (video_path, session_id, putt_index, uid),
-        )
-        return cur.rowcount > 0
-
-
-def get_putt_video_path(
-    uid: str, session_id: str, putt_index: int
-) -> Optional[str]:
-    """The retained clip path for one putt, if the session belongs to `uid`."""
-    pool = _get_pool()
-    if pool is None:
-        return None
-    with pool.connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            "select p.video_path from putts p "
-            "where p.session_id = %s::uuid and p.putt_index = %s and exists ("
-            "  select 1 from sessions s where s.id = p.session_id "
-            "  and s.user_id = %s)",
-            (session_id, putt_index, uid),
-        )
-        row = cur.fetchone()
-        return row["video_path"] if row else None
 
 
 def offsets_for_sessions(uid: str, session_ids: list[str]) -> list[float]:

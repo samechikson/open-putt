@@ -1,8 +1,6 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @EnvironmentObject private var settings: AppSettings
-    @EnvironmentObject private var coordinator: RecordingCoordinator
     @EnvironmentObject private var auth: AuthManager
 
     var body: some View {
@@ -20,17 +18,6 @@ struct SettingsView: View {
                 Section("Backend") {
                     Text(AppSettings.backendBaseURL)
                         .font(.caption).foregroundStyle(.secondary)
-                    Button("Retry pending uploads") {
-                        coordinator.uploads.uploadPending()
-                    }
-                }
-
-                Section("Capture") {
-                    Picker("Resolution", selection: $settings.capturePresetRaw) {
-                        ForEach(CapturePreset.allCases) { preset in
-                            Text(preset.displayName).tag(preset.rawValue)
-                        }
-                    }
                 }
             }
             .navigationTitle("Settings")

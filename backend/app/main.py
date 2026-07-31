@@ -40,8 +40,6 @@ from .db import (
     delete_putter,
     set_active_putter,
     ingest_device_putt,
-    set_putt_video_path,
-    get_putt_video_path,
 )
 from .auth import require_user, require_device, require_user_or_device
 from . import cloud
@@ -651,82 +649,6 @@ async def device_putt(request: Request, uid: str = Depends(require_user_or_devic
     return JSONResponse(
         {"session_id": session_id, "putt_index": putt_index}, status_code=201
     )
-
-
-# MARK: Per-putt review clips (hardware gate; uploaded by the iOS app as the user)
-
-
-def _validate_putt_ref(session_id: str, putt_index: int) -> str:
-    """Coerce a putt reference from the path, or raise 400/422."""
-    try:
-        return str(uuid.UUID(session_id))
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=400, detail="session_id must be a UUID.")
-
-
-@app.post("/device/putts/{session_id}/{putt_index}/video/upload-url", status_code=201)
-async def putt_video_upload_url(
-    session_id: str, putt_index: int, request: Request, uid: str = Depends(require_user)
-):
-    """Mint a signed URL to PUT one putt's review clip straight to storage.
-
-    Body: `{filename?}`. Returns `{object_name, upload_url}`. The app PUTs the
-    clip to `upload_url`, then calls the associate endpoint below."""
-    if not cloud.storage_ready():
-        raise HTTPException(status_code=503, detail="Video storage is not configured.")
-    session_id = _validate_putt_ref(session_id, putt_index)
-    body = await request.json()
-    object_name = cloud.putt_video_object_name(session_id, putt_index, body.get("filename"))
-    try:
-        upload_url = await run_in_threadpool(cloud.upload_url_for, object_name)
-    except Exception:  # noqa: BLE001
-        logger.exception("Failed to make putt-video upload URL for %s", object_name)
-        raise HTTPException(status_code=503, detail="Could not start upload. Try again.")
-    return JSONResponse({"object_name": object_name, "upload_url": upload_url}, status_code=201)
-
-
-@app.post("/device/putts/{session_id}/{putt_index}/video", status_code=201)
-async def putt_video_associate(
-    session_id: str, putt_index: int, request: Request, uid: str = Depends(require_user)
-):
-    """Attach an already-uploaded clip to a putt: retain it (copy to the 90-day
-    `sessions/` prefix) and record its path on the putt row.
-
-    Body: `{object_name}` — the `uploads/` object the app just PUT."""
-    if not cloud.storage_ready():
-        raise HTTPException(status_code=503, detail="Video storage is not configured.")
-    session_id = _validate_putt_ref(session_id, putt_index)
-    body = await request.json()
-    object_name = body.get("object_name")
-    if not object_name or not object_name.startswith("uploads/"):
-        raise HTTPException(status_code=400, detail="Invalid object_name")
-    if not await run_in_threadpool(cloud.object_exists, object_name):
-        raise HTTPException(status_code=400, detail="Uploaded file not found. Upload it first.")
-
-    retained = cloud.retained_object_name(object_name)
-    await run_in_threadpool(cloud.copy_object, object_name, retained)
-    ok = await run_in_threadpool(set_putt_video_path, uid, session_id, putt_index, retained)
-    if not ok:
-        # The putt row doesn't exist (or isn't owned): drop the retained copy so
-        # we don't leak an orphaned object, and report not-found.
-        await run_in_threadpool(cloud.delete_object, retained)
-        raise HTTPException(status_code=404, detail="Putt not found.")
-    await run_in_threadpool(cloud.delete_object, object_name)
-    return JSONResponse({"status": "attached"}, status_code=201)
-
-
-@app.get("/sessions/{session_id}/putts/{putt_index}/video")
-async def putt_video_url(
-    session_id: str, putt_index: int, uid: str = Depends(require_user)
-):
-    """Short-lived signed URL to stream one putt's review clip."""
-    if not cloud.storage_ready():
-        raise HTTPException(status_code=503, detail="Video storage is not configured.")
-    video_path = await run_in_threadpool(get_putt_video_path, uid, session_id, putt_index)
-    if not video_path:
-        raise HTTPException(status_code=404, detail="No video for this putt.")
-    url = await run_in_threadpool(cloud.download_url_for, video_path)
-    return JSONResponse({"url": url})
 
 
 # MARK: Session reads (ownership-scoped by the authenticated user)

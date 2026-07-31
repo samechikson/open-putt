@@ -89,16 +89,6 @@ def object_name_for(session_id: str, filename: Optional[str]) -> str:
     return f"uploads/{session_id}{ext}"
 
 
-def putt_video_object_name(
-    session_id: str, putt_index: int, filename: Optional[str]
-) -> str:
-    """Storage path for one gate putt's review clip. Keyed by session + putt
-    index so each putt gets its own object (unlike ``object_name_for``, which is
-    per-session and would collide across a session's putts)."""
-    ext = os.path.splitext(filename or "")[1] or ".mp4"
-    return f"uploads/{session_id}/putt-{putt_index}{ext}"
-
-
 def retained_object_name(upload_object_name: str) -> str:
     """Path under the retained `sessions/` prefix (kept 90 days) for a clip that
     was uploaded to the transient `uploads/` prefix (deleted after 1 day)."""

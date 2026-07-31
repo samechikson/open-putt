@@ -1,10 +1,10 @@
 import SwiftUI
+import UIKit
 
 /// The "Gate" tab: finds the ESP32 gate over Bluetooth, connects, and shows
 /// putts live as they roll (relaying each to the backend under the user's login).
 struct GateView: View {
     @EnvironmentObject private var gate: GateConnection
-    @EnvironmentObject private var recorder: CameraRecorder
 
     var body: some View {
         NavigationStack {
@@ -30,7 +30,15 @@ struct GateView: View {
             }
             .navigationTitle("Gate")
         }
-        .onAppear { gate.startScan() }
+        .onAppear {
+            gate.startScan()
+            // Keep the screen (and thus the app + camera) awake during a session,
+            // so putts and clips aren't dropped when the phone would auto-lock.
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
+        .onDisappear {
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
     }
 
     // MARK: Discovery / connect
@@ -71,11 +79,6 @@ struct GateView: View {
     private var liveView: some View {
         VStack(spacing: 0) {
             connectionPill
-            // Aim the phone at the gate — the last ~2 s before each putt is saved.
-            CameraPreview(session: recorder.captureSession)
-                .frame(height: 220)
-                .clipped()
-                .overlay(alignment: .topLeading) { filmingIndicator }
             if gate.putts.isEmpty {
                 ContentUnavailableView(
                     "Ready",
@@ -88,16 +91,6 @@ struct GateView: View {
                 }
             }
         }
-    }
-
-    private var filmingIndicator: some View {
-        HStack(spacing: 5) {
-            Circle().fill(.red).frame(width: 8, height: 8)
-            Text("Filming").font(.caption2)
-        }
-        .padding(.horizontal, 8).padding(.vertical, 4)
-        .background(.ultraThinMaterial, in: Capsule())
-        .padding(8)
     }
 
     private var connectionPill: some View {
@@ -131,10 +124,7 @@ struct GateView: View {
                 .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            HStack(spacing: 10) {
-                videoBadge(received.video)
-                relayBadge(received.relay)
-            }
+            relayBadge(received.relay)
         }
     }
 
@@ -147,22 +137,6 @@ struct GateView: View {
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
         case .failed:
             Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
-        }
-    }
-
-    /// Review-clip status, shown with a film icon so it reads apart from the
-    /// putt-relay checkmark.
-    @ViewBuilder
-    private func videoBadge(_ status: VideoStatus) -> some View {
-        switch status {
-        case .none:
-            EmptyView()
-        case .uploading:
-            Image(systemName: "video.badge.ellipsis").foregroundStyle(.secondary)
-        case .done:
-            Image(systemName: "video.fill").foregroundStyle(.green)
-        case .failed:
-            Image(systemName: "video.slash.fill").foregroundStyle(.orange)
         }
     }
 

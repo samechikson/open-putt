@@ -8,20 +8,10 @@ enum RelayStatus: Equatable {
     case failed(String)
 }
 
-/// Status of a putt's review-clip capture + upload.
-enum VideoStatus: Equatable {
-    case none        // not attempted (no clip yet)
-    case uploading
-    case done
-    case failed
-}
-
-/// A putt received over BLE, plus its backend-relay and video-upload status (for
-/// the live view).
+/// A putt received over BLE, plus its backend-relay status (for the live view).
 struct ReceivedPutt: Identifiable {
     let putt: GatePutt
     var relay: RelayStatus = .sending
-    var video: VideoStatus = .none
     var id: String { putt.id }
 }
 
@@ -63,14 +53,10 @@ final class GateConnection: NSObject, ObservableObject {
     private var central: CBCentralManager!
     private var gate: CBPeripheral?
     private let relay: GatePuttRelay
-    private let videoUploader: GateVideoUploader
-    private let preRoll: PreRollRecorder
     private let decoder = JSONDecoder()
 
-    init(settings: AppSettings, auth: AuthManager, preRoll: PreRollRecorder) {
+    init(settings: AppSettings, auth: AuthManager) {
         self.relay = GatePuttRelay(settings: settings, auth: auth)
-        self.videoUploader = GateVideoUploader(auth: auth)
-        self.preRoll = preRoll
         super.init()
         // nil queue → callbacks are delivered on the main thread.
         central = CBCentralManager(delegate: self, queue: nil)
@@ -110,11 +96,7 @@ final class GateConnection: NSObject, ObservableObject {
         Task {
             do {
                 try await relay.send(json)
-                await MainActor.run {
-                    self.setStatus(putt.id, .sent)
-                    // The putt row now exists, so its clip can be attached.
-                    self.captureAndUploadVideo(putt)
-                }
+                await MainActor.run { self.setStatus(putt.id, .sent) }
             } catch {
                 await MainActor.run {
                     self.setStatus(putt.id, .failed(error.localizedDescription))
@@ -123,34 +105,9 @@ final class GateConnection: NSObject, ObservableObject {
         }
     }
 
-    /// Pull the last ~2 s of footage and upload it as this putt's review clip.
-    private func captureAndUploadVideo(_ putt: GatePutt) {
-        setVideo(putt.id, .uploading)
-        Task {
-            guard let clip = await preRoll.clipLastSeconds(2.0) else {
-                await MainActor.run { self.setVideo(putt.id, .failed) }
-                return
-            }
-            do {
-                try await videoUploader.upload(
-                    clip, sessionID: putt.sessionID, puttIndex: putt.puttIndex
-                )
-                await MainActor.run { self.setVideo(putt.id, .done) }
-            } catch {
-                await MainActor.run { self.setVideo(putt.id, .failed) }
-            }
-        }
-    }
-
     private func setStatus(_ id: String, _ status: RelayStatus) {
         if let idx = putts.firstIndex(where: { $0.id == id }) {
             putts[idx].relay = status
-        }
-    }
-
-    private func setVideo(_ id: String, _ status: VideoStatus) {
-        if let idx = putts.firstIndex(where: { $0.id == id }) {
-            putts[idx].video = status
         }
     }
 }
@@ -189,7 +146,6 @@ extension GateConnection: CBCentralManagerDelegate, CBPeripheralDelegate {
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         state = .connected
-        preRoll.start()   // begin buffering footage while connected
         peripheral.discoverServices([Self.serviceUUID])
     }
 
@@ -198,7 +154,6 @@ extension GateConnection: CBCentralManagerDelegate, CBPeripheralDelegate {
     ) {
         gate = nil
         connectedName = nil
-        preRoll.stop()
         startScan()
     }
 
@@ -207,7 +162,6 @@ extension GateConnection: CBCentralManagerDelegate, CBPeripheralDelegate {
     ) {
         gate = nil
         connectedName = nil
-        preRoll.stop()
         state = .disconnected
         startScan()   // try to find it again
     }
