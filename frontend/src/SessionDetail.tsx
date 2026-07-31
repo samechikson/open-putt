@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   fetchSession,
+  fetchPutts,
   fetchSessionVideoUrl,
   fetchPuttFrameUrl,
   deleteSession,
@@ -149,6 +150,19 @@ export default function SessionDetail({
         setSession(null);
       });
 
+    // Load the current putts up front so a finished session shows its full
+    // details immediately, independent of the live stream. The SSE subscription
+    // (below) then keeps them fresh — but it only overwrites this baseline once
+    // it actually has putts, so a slow baseline fetch can't clobber a stream
+    // update that already arrived.
+    fetchPutts(sessionId)
+      .then((rows) => {
+        if (!cancelled) setPutts((prev) => (prev.length ? prev : rows));
+      })
+      .catch(() => {
+        /* the stream is the primary live source; a failed baseline is fine */
+      });
+
     // Watch for background-analysis transitions (queued/processing → done/error).
     // Putts themselves stream in separately (subscribeToPutts, below).
     const unsubscribe = subscribeToSession(sessionId, (row) => {
@@ -185,11 +199,12 @@ export default function SessionDetail({
   const status = session?.status;
   const pending = status === "queued" || status === "processing";
 
-  // Stream putts in as they're recorded, so new ones appear without a refresh.
-  // Runs for every session (not just pending ones): a hardware-gate session is
-  // already 'done' while putts keep arriving over BLE, so gating on status would
-  // miss exactly the live case. The stream emits the current putts on connect
-  // and closes itself once the session can gain no more (see subscribeToPutts).
+  // Layer live updates on top of the baseline fetch above: stream putts in as
+  // they're recorded so new ones appear without a refresh. Runs for every
+  // session (not just pending ones): a hardware-gate session is already 'done'
+  // while putts keep arriving over BLE, so gating on status would miss exactly
+  // the live case. If the stream is unavailable the baseline still shows the
+  // session's details; the stream just won't push new putts live.
   useEffect(() => subscribeToPutts(sessionId, setPutts), [sessionId, reloadKey]);
 
   const offsets = putts

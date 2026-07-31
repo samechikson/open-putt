@@ -310,6 +310,10 @@ export function subscribeToPutts(
         signal: controller.signal,
         headers: { Accept: "text/event-stream" },
       });
+      // A 404 means the session or the streaming endpoint isn't there (e.g. a
+      // deleted session, or a backend without this route yet) — retrying can't
+      // help, so stop. The baseline fetch still renders whatever details exist.
+      if (res.status === 404) return;
       if (!res.ok || !res.body) throw new Error(`stream failed (${res.status})`);
 
       const reader = res.body.getReader();
