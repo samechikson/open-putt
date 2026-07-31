@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchSession,
   fetchPutts,
@@ -8,8 +9,6 @@ import {
   deletePutt,
   reanalyzeSession,
   updateSession,
-  subscribeToSession,
-  subscribeToPutts,
   breakTypeLabel,
   BREAK_TYPES,
   type SessionRow,
@@ -24,21 +23,65 @@ interface SessionDetailProps {
   onBack: () => void;
 }
 
+// How often a live session is polled for new putts / status, and how long after
+// creation a session still counts as live.
+const POLL_MS = 20_000;
+const RECENT_MS = 10 * 60_000;
+
+// Whether a session is worth polling. A hardware-gate session is 'done' from its
+// first putt but keeps gaining putts as the player putts, so recency (not status)
+// is what marks it live; a video analysis is also live while it's still running.
+// Stale sessions are fetched once and left alone.
+function isSessionLive(session: SessionRow | null | undefined): boolean {
+  if (!session) return false;
+  if (session.status === "queued" || session.status === "processing") return true;
+  return Date.now() - new Date(session.created_at).getTime() < RECENT_MS;
+}
+
 export default function SessionDetail({
   sessionId,
   onBack,
 }: SessionDetailProps) {
-  const [session, setSession] = useState<SessionRow | null | undefined>(
-    undefined,
-  );
-  const [putts, setPutts] = useState<PuttRow[]>([]);
-  const [putters, setPutters] = useState<PutterRow[]>([]);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  // Bumped after a re-analysis so the load-and-subscribe effect re-runs: the
-  // original subscription stops polling once a session is terminal, so a fresh
-  // one is needed to watch the re-run through to done/error.
-  const [reloadKey, setReloadKey] = useState(0);
+  const queryClient = useQueryClient();
+
+  // The session, polled every 20s while it's live (new gate putts land, or a
+  // video analysis finishes) and fetched once otherwise. `refetchInterval` is a
+  // function so it re-evaluates against the latest data and stops on its own.
+  const sessionQuery = useQuery({
+    queryKey: ["session", sessionId],
+    queryFn: () => fetchSession(sessionId),
+    refetchInterval: (query) =>
+      isSessionLive(query.state.data) ? POLL_MS : false,
+  });
+  const session = sessionQuery.data; // SessionRow | null | undefined
+
+  // The session's putts, polled on the same cadence so new ones appear on their
+  // own during a live session; a stale session just fetches them once.
+  const puttsQuery = useQuery({
+    queryKey: ["putts", sessionId],
+    queryFn: () => fetchPutts(sessionId),
+    refetchInterval: isSessionLive(session) ? POLL_MS : false,
+  });
+  const putts = puttsQuery.data ?? [];
+
+  const puttersQuery = useQuery({
+    queryKey: ["putters"],
+    queryFn: fetchPutters,
+  });
+  const putters: PutterRow[] = puttersQuery.data ?? [];
+
+  // Signed playback URL for a session with a retained video (short-lived, so let
+  // it go stale slowly). Gate sessions have no video, so this stays disabled.
+  const videoQuery = useQuery({
+    queryKey: ["sessionVideo", sessionId],
+    queryFn: () => fetchSessionVideoUrl(sessionId),
+    enabled: !!session?.video_path,
+    staleTime: RECENT_MS,
+  });
+  const videoUrl = videoQuery.data ?? null;
+
+  // Error from a re-analyze / delete action (session load errors render below).
+  const [actionError, setActionError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   // When playing a single putt, pause once its segment ends.
   const puttEndRef = useRef<number | null>(null);
@@ -127,7 +170,9 @@ export default function SessionDetail({
     setPuttError(null);
     try {
       await deletePutt(sessionId, p.putt_index);
-      setPutts((prev) => prev.filter((x) => x.putt_index !== p.putt_index));
+      queryClient.setQueryData<PuttRow[]>(["putts", sessionId], (prev) =>
+        (prev ?? []).filter((x) => x.putt_index !== p.putt_index),
+      );
       if (selectedPutt?.putt_index === p.putt_index) {
         setSelectedPutt(null);
         setFrame(null);
@@ -149,93 +194,12 @@ export default function SessionDetail({
     }
   };
 
-  useEffect(() => {
-    let cancelled = false;
-
-    // Any session with a retained video (done, or errored after retention):
-    // fetch a signed playback URL so the clip can be reviewed.
-    const loadVideo = (row: SessionRow) => {
-      if (!row.video_path) return;
-      fetchSessionVideoUrl(sessionId)
-        .then((url) => {
-          if (!cancelled) setVideoUrl(url);
-        })
-        .catch(() => {
-          /* playback is optional; stats still render */
-        });
-    };
-
-    fetchSession(sessionId)
-      .then((row) => {
-        if (cancelled || !row) {
-          if (!cancelled) setSession(row);
-          return;
-        }
-        setSession(row);
-        loadVideo(row);
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        setLoadError(e instanceof Error ? e.message : "Failed to load session");
-        setSession(null);
-      });
-
-    // Load the current putts up front so a finished session shows its full
-    // details immediately, independent of the live stream. The SSE subscription
-    // (below) then keeps them fresh — but it only overwrites this baseline once
-    // it actually has putts, so a slow baseline fetch can't clobber a stream
-    // update that already arrived.
-    fetchPutts(sessionId)
-      .then((rows) => {
-        if (!cancelled) setPutts((prev) => (prev.length ? prev : rows));
-      })
-      .catch(() => {
-        /* the stream is the primary live source; a failed baseline is fine */
-      });
-
-    // Watch for background-analysis transitions (queued/processing → done/error).
-    // Putts themselves stream in separately (subscribeToPutts, below).
-    const unsubscribe = subscribeToSession(sessionId, (row) => {
-      if (cancelled) return;
-      setSession(row);
-      loadVideo(row);
-    });
-
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
-  }, [sessionId, reloadKey]);
-
-  // The user's putters, for tagging this session (and resolving its putter name).
-  useEffect(() => {
-    let cancelled = false;
-    fetchPutters()
-      .then((rows) => {
-        if (!cancelled) setPutters(rows);
-      })
-      .catch(() => {
-        /* putter tagging is optional; the rest of the view still works */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const activePutter = putters.find((p) => p.is_active) ?? null;
   const sessionPutter =
     putters.find((p) => p.id === session?.putter_id) ?? null;
 
   const status = session?.status;
   const pending = status === "queued" || status === "processing";
-
-  // Layer live updates on top of the baseline fetch above: stream putts in as
-  // they're recorded so new ones appear without a refresh. Runs for every
-  // session (not just pending ones): a hardware-gate session is already 'done'
-  // while putts keep arriving over BLE, so gating on status would miss exactly
-  // the live case. If the stream is unavailable the baseline still shows the
-  // session's details; the stream just won't push new putts live.
-  useEffect(() => subscribeToPutts(sessionId, setPutts), [sessionId, reloadKey]);
 
   const offsets = putts
     .map((p) => p.offset_mm)
@@ -292,7 +256,9 @@ export default function SessionDetail({
         putter_id: editing.putterId === "" ? null : editing.putterId,
       };
       await updateSession(sessionId, metadata);
-      setSession((prev) => (prev ? { ...prev, ...metadata } : prev));
+      queryClient.setQueryData<SessionRow | null>(["session", sessionId], (prev) =>
+        prev ? { ...prev, ...metadata } : prev,
+      );
       setEditing(null);
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : "Could not update session");
@@ -312,20 +278,23 @@ export default function SessionDetail({
     )
       return;
     setReanalyzing(true);
-    setLoadError(null);
+    setActionError(null);
     try {
       await reanalyzeSession(sessionId);
-      // Reflect the reset immediately, then re-subscribe to watch it complete.
-      setPutts([]);
+      // Reflect the reset immediately: clearing putts and flipping to 'queued'
+      // makes isSessionLive() true, so both queries resume polling until done.
+      queryClient.setQueryData<PuttRow[]>(["putts", sessionId], []);
       setSelectedPutt(null);
       setFrame(null);
       setFrameError(null);
-      setSession((prev) =>
+      queryClient.setQueryData<SessionRow | null>(["session", sessionId], (prev) =>
         prev ? { ...prev, status: "queued", error: null } : prev,
       );
-      setReloadKey((k) => k + 1);
+      void queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : "Could not start re-analysis");
+      setActionError(
+        e instanceof Error ? e.message : "Could not start re-analysis",
+      );
     } finally {
       setReanalyzing(false);
     }
@@ -340,12 +309,15 @@ export default function SessionDetail({
     )
       return;
     setDeleting(true);
+    setActionError(null);
     try {
       await deleteSession(sessionId);
       onBack();
     } catch (e) {
       setDeleting(false);
-      setLoadError(e instanceof Error ? e.message : "Could not delete session");
+      setActionError(
+        e instanceof Error ? e.message : "Could not delete session",
+      );
     }
   };
 
@@ -386,16 +358,26 @@ export default function SessionDetail({
         </div>
       </div>
 
-      {session === undefined && (
+      {actionError && (
+        <div className="bg-[#1a1a1a] border border-[#3a2020] rounded-xl p-4 mb-6 text-sm text-[#f87171]">
+          {actionError}
+        </div>
+      )}
+
+      {sessionQuery.isPending && (
         <div className="flex items-center gap-2 text-sm text-[#888]">
           <span className="w-3.5 h-3.5 border-2 border-[#22c55e] border-t-transparent rounded-full animate-spin" />
           Loading…
         </div>
       )}
 
-      {session === null && (
+      {(sessionQuery.isError || session === null) && (
         <div className="bg-[#1a1a1a] border border-[#3a2020] rounded-xl p-5 text-sm text-[#f87171]">
-          {loadError ?? "Failed to load session."}
+          {sessionQuery.error instanceof Error
+            ? sessionQuery.error.message
+            : session === null
+              ? "Session not found."
+              : "Failed to load session."}
         </div>
       )}
 

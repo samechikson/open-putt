@@ -3,13 +3,12 @@ from fastapi import (
 )
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, FileResponse, Response
 import logging
 import tempfile
 import os
 import uuid
 import hmac
-import json
 import asyncio
 import cv2
 from typing import Optional
@@ -673,84 +672,10 @@ async def session_get(session_id: str, uid: str = Depends(require_user)):
 
 @app.get("/sessions/{session_id}/putts")
 async def session_putts(session_id: str, uid: str = Depends(require_user)):
-    """A session's putts, if the session belongs to the signed-in user."""
+    """A session's putts, if the session belongs to the signed-in user. Clients
+    poll this on a short interval while a session is live (a gate session keeps
+    gaining putts) to pick up new putts."""
     return await run_in_threadpool(list_putts, uid, session_id)
-
-
-# How often the putts stream re-reads the DB for new putts, and the max quiet
-# gap before it emits a heartbeat comment (proxies drop idle streams otherwise).
-_PUTTS_STREAM_POLL_S = 2.0
-_PUTTS_STREAM_HEARTBEAT_S = 15.0
-
-
-def _sse_frame(data: str, event: Optional[str] = None) -> str:
-    """Format one Server-Sent Events frame. `data` must be single-line."""
-    head = f"event: {event}\n" if event else ""
-    return f"{head}data: {data}\n\n"
-
-
-@app.get("/sessions/{session_id}/putts/stream")
-async def session_putts_stream(session_id: str, uid: str = Depends(require_user)):
-    """Stream a session's putts over Server-Sent Events, pushing new putts as
-    they land. This is what makes the live gate view update on its own: hardware
-    putts append to an already-`done` session one at a time (see
-    `ingest_device_putt`), so there's no status transition to watch — the client
-    holds this one connection and receives each putt as it arrives.
-
-    Emits the current putts immediately on connect (a `putts` event carrying the
-    same array as GET /putts), then another `putts` event whenever the set
-    changes. A *finalized* session — an analysis `done` with a retained video, or
-    a terminal `error` — can't gain putts, so it sends once and closes with a
-    `complete` event; a *live* session (analysis still running, or a video-less
-    gate session that can still grow) stays open, polling until the client
-    disconnects. Since the DB has no push channel (see subscribeToSession), the
-    push is server-side: this endpoint polls Postgres and forwards changes over
-    the single held connection, sparing the client repeated authenticated GETs.
-    """
-
-    async def event_stream():
-        last_key: Optional[str] = None
-        last_emit = asyncio.get_event_loop().time()
-        while True:
-            session = await run_in_threadpool(get_session, uid, session_id)
-            if session is None:
-                # Not found / not owned: report once and stop (no reconnect).
-                yield _sse_frame(
-                    json.dumps({"detail": "Session not found."}), event="error"
-                )
-                return
-
-            putts = await run_in_threadpool(list_putts, uid, session_id)
-            key = json.dumps(putts, default=str, sort_keys=True)
-            now = asyncio.get_event_loop().time()
-            if key != last_key:
-                last_key = key
-                last_emit = now
-                yield _sse_frame(json.dumps(putts, default=str), event="putts")
-            elif now - last_emit >= _PUTTS_STREAM_HEARTBEAT_S:
-                last_emit = now
-                yield ": keepalive\n\n"  # comment frame; ignored by the client
-
-            status = session.get("status")
-            finalized = status == "error" or (
-                status == "done" and session.get("video_path") is not None
-            )
-            if finalized:
-                yield _sse_frame(json.dumps({"status": status}), event="complete")
-                return
-
-            await asyncio.sleep(_PUTTS_STREAM_POLL_S)
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            # Tell nginx / Cloud Run's proxy not to buffer, so frames flush live.
-            "X-Accel-Buffering": "no",
-        },
-    )
 
 
 @app.post("/putts/offsets")
