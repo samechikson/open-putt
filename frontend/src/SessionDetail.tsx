@@ -8,6 +8,7 @@ import {
   reanalyzeSession,
   updateSession,
   subscribeToSession,
+  subscribeToPutts,
   breakTypeLabel,
   BREAK_TYPES,
   type SessionRow,
@@ -200,6 +201,14 @@ export default function SessionDetail({
 
   const status = session?.status;
   const pending = status === "queued" || status === "processing";
+
+  // Stream putts in as they're recorded. While the session is still active
+  // (queued/processing) new putts land in the table without a manual refresh;
+  // the authoritative final set is loaded again on the 'done' transition above.
+  useEffect(() => {
+    if (!pending) return;
+    return subscribeToPutts(sessionId, setPutts);
+  }, [sessionId, pending, reloadKey]);
 
   const offsets = putts
     .map((p) => p.offset_mm)
@@ -524,7 +533,7 @@ export default function SessionDetail({
         </>
       )}
 
-      {status === "done" && (
+      {(status === "done" || putts.length > 0) && (
         <>
           {videoUrl && (
             <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-3 mb-6">

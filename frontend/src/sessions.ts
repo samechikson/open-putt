@@ -253,6 +253,43 @@ export async function fetchPutts(sessionId: string): Promise<PuttRow[]> {
   );
 }
 
+// Watch a session's putts by polling the backend (same push-less approach as
+// subscribeToSession — the database has no realtime channel). Fetches once
+// immediately, then polls, invoking onChange only when the putt set actually
+// changes (a new putt arrives, or an existing one's values update). Keeps
+// polling until unsubscribed, so it streams putts in as they're recorded during
+// a live session. Returns an unsubscribe function.
+export function subscribeToPutts(
+  id: string,
+  onChange: (rows: PuttRow[]) => void,
+): () => void {
+  const POLL_MS = 2500;
+  let cancelled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let lastKey: string | undefined;
+
+  const tick = async () => {
+    try {
+      const rows = await fetchPutts(id);
+      if (cancelled) return;
+      const key = JSON.stringify(rows);
+      if (key !== lastKey) {
+        lastKey = key;
+        onChange(rows);
+      }
+    } catch {
+      // transient error; keep polling
+    }
+    if (!cancelled) timer = setTimeout(tick, POLL_MS);
+  };
+  void tick();
+
+  return () => {
+    cancelled = true;
+    if (timer) clearTimeout(timer);
+  };
+}
+
 // Fetch the gate-crossing still for a putt as an object URL. The frame endpoint
 // needs the Bearer token (so a bare <img src> can't hit it directly); we fetch
 // the JPEG as a blob and wrap it in an object URL. Callers must revoke the URL
