@@ -5,6 +5,7 @@ import UIKit
 /// putts live as they roll (relaying each to the backend under the user's login).
 struct GateView: View {
     @EnvironmentObject private var gate: GateConnection
+    @EnvironmentObject private var config: SessionConfigStore
 
     var body: some View {
         NavigationStack {
@@ -30,6 +31,7 @@ struct GateView: View {
             }
             .navigationTitle("Gate")
         }
+        .task { await config.loadPutters() }
         .onAppear {
             gate.startScan()
             // Keep the screen (and thus the app + camera) awake during a session,
@@ -79,6 +81,7 @@ struct GateView: View {
     private var liveView: some View {
         VStack(spacing: 0) {
             connectionPill
+            sessionSetup
             if gate.putts.isEmpty {
                 ContentUnavailableView(
                     "Ready",
@@ -91,6 +94,70 @@ struct GateView: View {
                 }
             }
         }
+    }
+
+    // MARK: Session setup
+
+    /// Dropdowns to tag the session — the putter used, the putt length, and the
+    /// break. Chosen before rolling; applied to the session once the gate starts
+    /// it (its first putt). Changing one mid-session re-tags the active session.
+    private var sessionSetup: some View {
+        VStack(spacing: 10) {
+            HStack {
+                Text("Session")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                if let error = config.loadError {
+                    Text(error)
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
+            setupRow(label: "Putter") {
+                Picker("Putter", selection: $config.selectedPutterId) {
+                    Text("None").tag(String?.none)
+                    ForEach(config.putters) { putter in
+                        Text(putter.isActive ? "\(putter.name) (active)" : putter.name)
+                            .tag(Optional(putter.id))
+                    }
+                }
+            }
+            setupRow(label: "Length") {
+                Picker("Length", selection: $config.lengthFeet) {
+                    Text("Not set").tag(Int?.none)
+                    ForEach(sessionLengthOptionsFeet, id: \.self) { feet in
+                        Text("\(feet) ft").tag(Optional(feet))
+                    }
+                }
+            }
+            setupRow(label: "Break") {
+                Picker("Break", selection: $config.breakType) {
+                    Text("Not set").tag(String?.none)
+                    ForEach(BreakOption.all) { option in
+                        Text(option.label).tag(Optional(option.value))
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(.thinMaterial)
+        // Re-tag the live session if a pick changes after putts have started.
+        .onChange(of: config.selectedPutterId) { gate.reapplyMetadata() }
+        .onChange(of: config.lengthFeet) { gate.reapplyMetadata() }
+        .onChange(of: config.breakType) { gate.reapplyMetadata() }
+    }
+
+    /// A labeled row holding a menu-style picker (value on the right).
+    private func setupRow<P: View>(
+        label: String, @ViewBuilder _ picker: () -> P
+    ) -> some View {
+        HStack {
+            Text(label).foregroundStyle(.secondary)
+            Spacer()
+            picker()
+                .pickerStyle(.menu)
+                .labelsHidden()
+        }
+        .font(.subheadline)
     }
 
     private var connectionPill: some View {

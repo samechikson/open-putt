@@ -6,6 +6,7 @@ struct PuttingGateApp: App {
 
     @StateObject private var settings: AppSettings
     @StateObject private var auth: AuthManager
+    @StateObject private var config: SessionConfigStore
     @StateObject private var gate: GateConnection
 
     init() {
@@ -15,10 +16,14 @@ struct PuttingGateApp: App {
 
         let settings = AppSettings()
         let auth = AuthManager()
-        let gate = GateConnection(settings: settings, auth: auth)
+        let config = SessionConfigStore(
+            service: SessionMetadataService(settings: settings, auth: auth)
+        )
+        let gate = GateConnection(settings: settings, auth: auth, config: config)
 
         _settings = StateObject(wrappedValue: settings)
         _auth = StateObject(wrappedValue: auth)
+        _config = StateObject(wrappedValue: config)
         _gate = StateObject(wrappedValue: gate)
     }
 
@@ -27,6 +32,7 @@ struct PuttingGateApp: App {
             RootView()
                 .environmentObject(settings)
                 .environmentObject(auth)
+                .environmentObject(config)
                 .environmentObject(gate)
         }
     }

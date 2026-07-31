@@ -49,17 +49,31 @@ final class GateConnection: NSObject, ObservableObject {
     @Published private(set) var discovered: [DiscoveredGate] = []
     @Published private(set) var putts: [ReceivedPutt] = []
     @Published private(set) var connectedName: String?
+    /// The session id of the current run of putts (the firmware mints it and
+    /// stamps every putt with it). Tracked so we can tell when a new session
+    /// starts — its first putt carries a session id we haven't seen — and tag it.
+    @Published private(set) var activeSessionId: String?
 
     private var central: CBCentralManager!
     private var gate: CBPeripheral?
     private let relay: GatePuttRelay
+    private let config: SessionConfigStore
     private let decoder = JSONDecoder()
 
-    init(settings: AppSettings, auth: AuthManager) {
+    init(settings: AppSettings, auth: AuthManager, config: SessionConfigStore) {
         self.relay = GatePuttRelay(settings: settings, auth: auth)
+        self.config = config
         super.init()
         // nil queue → callbacks are delivered on the main thread.
         central = CBCentralManager(delegate: self, queue: nil)
+    }
+
+    /// Re-tag the active session with the player's current selection — called
+    /// when they change a setup picker after putts have already started. No-op
+    /// until a session exists.
+    func reapplyMetadata() {
+        guard let sessionId = activeSessionId else { return }
+        Task { await config.apply(to: sessionId) }
     }
 
     // MARK: Intent
@@ -92,11 +106,17 @@ final class GateConnection: NSObject, ObservableObject {
 
     // MARK: Relay
 
-    private func relayPutt(_ putt: GatePutt, json: Data) {
+    private func relayPutt(_ putt: GatePutt, json: Data, tagSession: Bool) {
         Task {
             do {
                 try await relay.send(json)
                 await MainActor.run { self.setStatus(putt.id, .sent) }
+                // The session row is created backend-side by its first putt, so
+                // only now — once that putt is saved — can we tag the session
+                // with the player's chosen putter / length / break.
+                if tagSession {
+                    await config.apply(to: putt.sessionID)
+                }
             } catch {
                 await MainActor.run {
                     self.setStatus(putt.id, .failed(error.localizedDescription))
@@ -186,7 +206,11 @@ extension GateConnection: CBCentralManagerDelegate, CBPeripheralDelegate {
         guard let data = characteristic.value,
               let putt = try? decoder.decode(GatePutt.self, from: data)
         else { return }
+        // A putt bearing a session id we haven't seen marks a new session; tag it
+        // (with the player's setup selection) once its first putt is relayed.
+        let isNewSession = putt.sessionID != activeSessionId
+        if isNewSession { activeSessionId = putt.sessionID }
         putts.insert(ReceivedPutt(putt: putt), at: 0)   // newest first
-        relayPutt(putt, json: data)
+        relayPutt(putt, json: data, tagSession: isNewSession)
     }
 }

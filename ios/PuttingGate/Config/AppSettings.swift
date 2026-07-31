@@ -13,4 +13,14 @@ final class AppSettings: ObservableObject {
     /// Endpoint that ingests one putt from the hardware gate, relayed by the app
     /// over BLE under the user's login.
     var devicePuttsURL: URL? { URL(string: Self.backendBaseURL + "/device/putts") }
+
+    /// The signed-in user's putters, for the session-setup picker.
+    var puttersURL: URL? { URL(string: Self.backendBaseURL + "/putters") }
+
+    /// One session, used to PATCH its metadata (putter / length / break).
+    func sessionURL(id: String) -> URL? {
+        guard let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
+        else { return nil }
+        return URL(string: Self.backendBaseURL + "/sessions/" + encoded)
+    }
 }
