@@ -412,6 +412,35 @@ def list_putts(uid: str, session_id: str) -> list[dict[str, Any]]:
         return cur.fetchall()
 
 
+def delete_putt(uid: str, session_id: str, putt_index: int) -> bool:
+    """Delete one putt from a user's session, keeping putt_count in sync.
+
+    Ownership is enforced through the session's user_id, so a putt in someone
+    else's session (or a missing one) deletes nothing and returns False. The
+    remaining putts keep their putt_index values — indices are the stable putt
+    identity (the crossing-frame endpoint and the device's idempotent upsert both
+    key on them), so a delete leaves a gap rather than renumbering."""
+    pool = _get_pool()
+    if pool is None:
+        return False
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "delete from putts p using sessions s "
+            "where p.session_id = s.id and s.id = %s::uuid and s.user_id = %s "
+            "and p.putt_index = %s",
+            (session_id, uid, putt_index),
+        )
+        if cur.rowcount == 0:
+            return False
+        cur.execute(
+            "update sessions set putt_count = "
+            "(select count(*) from putts where session_id = %s::uuid) "
+            "where id = %s::uuid",
+            (session_id, session_id),
+        )
+        return True
+
+
 def get_putt_crossing_frame(
     uid: str, session_id: str, putt_index: int
 ) -> Optional[int]:

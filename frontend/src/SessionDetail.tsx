@@ -5,6 +5,7 @@ import {
   fetchSessionVideoUrl,
   fetchPuttFrameUrl,
   deleteSession,
+  deletePutt,
   reanalyzeSession,
   updateSession,
   subscribeToSession,
@@ -108,6 +109,35 @@ export default function SessionDetail({
   const handlePuttClick = (p: PuttRow) => {
     selectPutt(p);
     playPutt(p);
+  };
+
+  // The putt_index currently being deleted (disables its row's button), and any
+  // error from the last delete attempt.
+  const [deletingPutt, setDeletingPutt] = useState<number | null>(null);
+  const [puttError, setPuttError] = useState<string | null>(null);
+
+  // Delete a single putt (e.g. a mishit or a false gate trip). Drops it from the
+  // table on success and clears the crossing still if it was the selected putt.
+  const handleDeletePutt = async (p: PuttRow) => {
+    if (
+      !window.confirm(`Delete putt ${p.putt_index + 1}? This can't be undone.`)
+    )
+      return;
+    setDeletingPutt(p.putt_index);
+    setPuttError(null);
+    try {
+      await deletePutt(sessionId, p.putt_index);
+      setPutts((prev) => prev.filter((x) => x.putt_index !== p.putt_index));
+      if (selectedPutt?.putt_index === p.putt_index) {
+        setSelectedPutt(null);
+        setFrame(null);
+        setFrameError(null);
+      }
+    } catch (e) {
+      setPuttError(e instanceof Error ? e.message : "Could not delete putt");
+    } finally {
+      setDeletingPutt(null);
+    }
   };
 
   const handleTimeUpdate = () => {
@@ -602,6 +632,9 @@ export default function SessionDetail({
                           Sensors (mm)
                         </th>
                       )}
+                      <th className="px-4 py-3">
+                        <span className="sr-only">Actions</span>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -653,11 +686,33 @@ export default function SessionDetail({
                                     .join(" / ")}
                             </td>
                           )}
+                          <td className="px-4 py-3 text-right">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                // Don't let the row's select/play click fire too.
+                                e.stopPropagation();
+                                void handleDeletePutt(p);
+                              }}
+                              disabled={deletingPutt === p.putt_index}
+                              title="Delete this putt"
+                              className="text-xs font-medium text-[#f87171] hover:text-[#fca5a5] disabled:opacity-50 cursor-pointer"
+                            >
+                              {deletingPutt === p.putt_index
+                                ? "Deleting…"
+                                : "Delete"}
+                            </button>
+                          </td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
+                {puttError && (
+                  <p className="px-4 py-3 text-sm text-[#f87171] border-t border-[#333]">
+                    {puttError}
+                  </p>
+                )}
               </div>
 
               <div className="lg:w-80 shrink-0 bg-[#1a1a1a] border border-[#333] rounded-xl p-4">

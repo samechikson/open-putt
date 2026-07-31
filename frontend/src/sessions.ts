@@ -123,6 +123,20 @@ export async function deleteSession(sessionId: string): Promise<void> {
   }
 }
 
+// Delete a single putt from a session (by its putt_index). The backend keeps
+// the session's putt_count in sync; remaining putts keep their indices.
+export async function deletePutt(
+  sessionId: string,
+  puttIndex: number,
+): Promise<void> {
+  const res = await apiFetch(`/sessions/${sessionId}/putts/${puttIndex}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    throw new Error(await detailFromResponse(res, "Could not delete putt"));
+  }
+}
+
 // A short-lived signed URL to stream a session's retained video.
 export async function fetchSessionVideoUrl(sessionId: string): Promise<string> {
   const { url } = await apiJson<{ url: string }>(

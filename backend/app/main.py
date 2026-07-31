@@ -29,6 +29,7 @@ from .db import (
     set_session_status,
     get_session_video_path,
     get_putt_crossing_frame,
+    delete_putt,
     delete_session,
     update_session_metadata,
     list_sessions,
@@ -813,6 +814,19 @@ async def putt_crossing_frame(
     if jpeg is None:
         raise HTTPException(status_code=404, detail="Could not read the crossing frame.")
     return Response(content=jpeg, media_type="image/jpeg")
+
+
+@app.delete("/sessions/{session_id}/putts/{putt_index}")
+async def delete_putt_endpoint(
+    session_id: str, putt_index: int, uid: str = Depends(require_user)
+):
+    """Delete one putt from the user's session (e.g. a mishit or a false trip).
+    Keeps the session's putt_count in sync. 404 if the putt doesn't exist or the
+    session isn't the user's."""
+    ok = await run_in_threadpool(delete_putt, uid, session_id, putt_index)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Putt not found.")
+    return JSONResponse({"status": "deleted"})
 
 
 @app.delete("/sessions/{session_id}")
