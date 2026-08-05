@@ -17,6 +17,12 @@ final class AppSettings: ObservableObject {
     /// The signed-in user's putters, for the session-setup picker.
     var puttersURL: URL? { URL(string: Self.backendBaseURL + "/putters") }
 
+    /// All of the signed-in user's sessions (newest first), for the History tab.
+    var sessionsURL: URL? { URL(string: Self.backendBaseURL + "/sessions") }
+
+    /// Per-putt offsets across a set of sessions, for the History bias summary.
+    var puttsOffsetsURL: URL? { URL(string: Self.backendBaseURL + "/putts/offsets") }
+
     /// One session, used to PATCH its metadata (putter / length / break).
     func sessionURL(id: String) -> URL? {
         guard let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)

@@ -31,6 +31,39 @@ final class SessionMetadataService {
         return try JSONDecoder().decode([Putter].self, from: data)
     }
 
+    /// The signed-in user's sessions, newest first, from `GET /api/sessions`.
+    func fetchSessions() async throws -> [SessionRow] {
+        guard let url = settings.sessionsURL else {
+            throw ServiceError(message: "No backend URL configured")
+        }
+        var req = URLRequest(url: url)
+        if let token = await auth.validAccessToken() {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, response) = try await URLSession.shared.data(for: req)
+        try Self.check(response, data)
+        return try JSONDecoder().decode([SessionRow].self, from: data)
+    }
+
+    /// The `offset_mm` of every putt across the given sessions, from
+    /// `POST /api/putts/offsets`. Used for the History push/pull bias summary.
+    func fetchOffsets(sessionIds: [String]) async throws -> [Double] {
+        guard let url = settings.puttsOffsetsURL else {
+            throw ServiceError(message: "No backend URL configured")
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = await auth.validAccessToken() {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["session_ids": sessionIds])
+        let (data, response) = try await URLSession.shared.data(for: req)
+        try Self.check(response, data)
+        struct OffsetsResponse: Decodable { let offsets: [Double] }
+        return try JSONDecoder().decode(OffsetsResponse.self, from: data).offsets
+    }
+
     /// Tag a session via `PATCH /api/sessions/{id}`. The session must already
     /// exist — the gate creates it on its first putt — so call this only after a
     /// putt of that session has been relayed.

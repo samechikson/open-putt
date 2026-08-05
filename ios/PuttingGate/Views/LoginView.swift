@@ -13,83 +13,103 @@ struct LoginView: View {
     @State private var notice: String?
 
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 36) {
             Spacer()
 
-            VStack(spacing: 4) {
-                Image(systemName: "target")
-                    .font(.system(size: 44))
-                    .foregroundStyle(.green)
+            VStack(spacing: 10) {
+                PGLogo(size: 52)
                 Text("Putting Gate")
-                    .font(.largeTitle.bold())
+                    .font(.pgHeading(26, relativeTo: .largeTitle))
+                    .foregroundStyle(Color.pgText)
                 Text(mode == .signIn ? "Sign in to your account" : "Create an account")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.pgBody(14))
+                    .foregroundStyle(Color.pgNeutral700)
             }
 
-            VStack(spacing: 12) {
-                TextField("Email", text: $email)
-                    .textContentType(.emailAddress)
-                    .keyboardType(.emailAddress)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .padding(12)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
-
-                SecureField("Password", text: $password)
-                    .textContentType(mode == .signIn ? .password : .newPassword)
-                    .padding(12)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+            VStack(spacing: 16) {
+                field(label: "Email") {
+                    TextField("you@email.com", text: $email)
+                        .textContentType(.emailAddress)
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+                field(label: "Password") {
+                    SecureField("••••••••", text: $password)
+                        .textContentType(mode == .signIn ? .password : .newPassword)
+                }
 
                 if let errorText {
-                    Text(errorText)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    message(errorText, color: .pgAccent700)
                 }
                 if let notice {
-                    Text(notice)
-                        .font(.footnote)
-                        .foregroundStyle(.green)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    message(notice, color: .pgAccent2_700)
                 }
 
                 Button(action: submit) {
                     if busy {
-                        ProgressView().frame(maxWidth: .infinity)
+                        ProgressView().tint(.pgBg).frame(maxWidth: .infinity)
                     } else {
                         Text(mode == .signIn ? "Sign in" : "Sign up")
-                            .fontWeight(.semibold)
-                            .frame(maxWidth: .infinity)
                     }
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
-                .controlSize(.large)
+                .buttonStyle(PGPrimaryButtonStyle())
                 .disabled(busy || email.isEmpty || password.isEmpty)
-            }
-            .padding(.horizontal)
+                .opacity(busy || email.isEmpty || password.isEmpty ? 0.55 : 1)
+                .padding(.top, 6)
 
-            Button {
-                mode = mode == .signIn ? .signUp : .signIn
-                errorText = nil
-                notice = nil
-            } label: {
-                Text(mode == .signIn ? "No account? Sign up" : "Have an account? Sign in")
-                    .font(.footnote)
-            }
+                Button {
+                    mode = mode == .signIn ? .signUp : .signIn
+                    errorText = nil
+                    notice = nil
+                } label: {
+                    Text(mode == .signIn ? "No account? Sign up" : "Have an account? Sign in")
+                }
+                .buttonStyle(PGGhostButtonStyle())
+                .frame(maxWidth: .infinity)
 
-            if mode == .signIn {
-                Button("Forgot password?", action: resetPassword)
-                    .font(.footnote)
-                    .disabled(busy)
+                if mode == .signIn {
+                    Button("Forgot password?", action: resetPassword)
+                        .buttonStyle(PGGhostButtonStyle(color: .pgNeutral700, size: 13))
+                        .frame(maxWidth: .infinity)
+                        .disabled(busy)
+                }
             }
 
             Spacer()
             Spacer()
         }
-        .padding()
+        .padding(.horizontal, 32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .pgScreenBackground()
+        .tint(.pgAccent)
     }
+
+    // MARK: Pieces
+
+    private func field<Content: View>(label: String, @ViewBuilder _ input: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label)
+                .font(.pgBody(12))
+                .foregroundStyle(Color.pgText.opacity(0.7))
+            input()
+                .font(.pgBody(15))
+                .foregroundStyle(Color.pgText)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .background(Color.pgSurface, in: Capsule())
+                .overlay(Capsule().stroke(Color.pgDivider, lineWidth: 1))
+        }
+    }
+
+    private func message(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.pgBody(13))
+            .foregroundStyle(color)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: Actions
 
     private func resetPassword() {
         guard !email.isEmpty else {

@@ -7,20 +7,23 @@ struct GateView: View {
     @EnvironmentObject private var gate: GateConnection
     @EnvironmentObject private var config: SessionConfigStore
 
+    @State private var ringSpin = false
+
     var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            PGHeader("Gate")
             Group {
                 switch gate.state {
                 case .connected:
                     liveView
                 case .poweredOff:
-                    statusMessage(
+                    statusView(
                         icon: "bolt.horizontal.circle",
                         title: "Bluetooth is off",
                         detail: "Turn on Bluetooth to connect to your putting gate."
                     )
                 case .unauthorized:
-                    statusMessage(
+                    statusView(
                         icon: "exclamationmark.triangle",
                         title: "Bluetooth access needed",
                         detail: "Allow Bluetooth for PuttingGate in Settings to connect to your gate."
@@ -29,8 +32,10 @@ struct GateView: View {
                     discoveryView
                 }
             }
-            .navigationTitle("Gate")
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .pgScreenBackground()
+        .tint(.pgAccent)
         .task { await config.loadPutters() }
         .onAppear {
             gate.startScan()
@@ -46,54 +51,112 @@ struct GateView: View {
     // MARK: Discovery / connect
 
     private var discoveryView: some View {
-        VStack(spacing: 20) {
-            Spacer()
-            ProgressView()
-            Text("Looking for your gate…")
-                .font(.headline)
-            Text("Power on the gate and keep it nearby.")
-                .font(.caption).foregroundStyle(.secondary)
+        ScrollView {
+            VStack(spacing: 20) {
+                seekingBadge
+                VStack(spacing: 4) {
+                    Text("Looking for your gate…")
+                        .font(.pgHeading(20, relativeTo: .title3))
+                        .foregroundStyle(Color.pgText)
+                    Text("Power on the gate and keep it nearby.")
+                        .font(.pgBody(13))
+                        .foregroundStyle(Color.pgNeutral700)
+                }
 
-            if !gate.discovered.isEmpty {
-                List(gate.discovered) { found in
-                    Button { gate.connect(found) } label: {
-                        HStack {
-                            Image(systemName: "sensor.tag.radiowaves.forward")
-                            VStack(alignment: .leading) {
-                                Text(found.name)
-                                Text(signalLabel(found.rssi))
-                                    .font(.caption).foregroundStyle(.secondary)
+                if !gate.discovered.isEmpty {
+                    VStack(spacing: 0) {
+                        ForEach(Array(gate.discovered.enumerated()), id: \.element.id) { index, found in
+                            Button { gate.connect(found) } label: {
+                                HStack(spacing: 12) {
+                                    PGGlyph(barColor: .pgAccent700, dashColor: .pgAccent2_500)
+                                        .frame(width: 20, height: 20)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(found.name)
+                                            .font(.pgBody(15, weight: .semibold))
+                                            .foregroundStyle(Color.pgText)
+                                        Text(signalLabel(found.rssi))
+                                            .font(.pgBody(12))
+                                            .foregroundStyle(Color.pgNeutral700)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(Color.pgNeutral500)
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 14)
+                                .contentShape(Rectangle())
                             }
-                            Spacer()
-                            Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                            .buttonStyle(.plain)
+                            if index < gate.discovered.count - 1 { PGDivider() }
                         }
                     }
+                    .pgCard()
                 }
-                .frame(maxHeight: 240)
             }
-            Spacer()
+            .padding(.horizontal, 20)
+            .padding(.top, 40)
+            .padding(.bottom, 24)
         }
-        .padding()
+    }
+
+    /// The pulsing "seeking" mark: the gate glyph inside a sage disc ringed by a
+    /// slowly rotating dashed circle.
+    private var seekingBadge: some View {
+        ZStack {
+            Circle()
+                .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [4, 6]))
+                .foregroundStyle(Color.pgAccent2_300)
+                .frame(width: 124, height: 124)
+                .rotationEffect(.degrees(ringSpin ? 360 : 0))
+                .animation(.linear(duration: 14).repeatForever(autoreverses: false), value: ringSpin)
+            Circle()
+                .fill(Color.pgAccent2_100)
+                .frame(width: 104, height: 104)
+            PGGlyph(barColor: .pgAccent2_700, dashColor: .pgAccent2_500)
+                .frame(width: 46, height: 46)
+        }
+        .onAppear { ringSpin = true }
     }
 
     // MARK: Live putts
 
     private var liveView: some View {
-        VStack(spacing: 0) {
-            connectionPill
-            sessionSetup
-            if gate.putts.isEmpty {
-                ContentUnavailableView(
-                    "Ready",
-                    systemImage: "figure.golf",
-                    description: Text("Roll a putt through the gate.")
-                )
-            } else {
-                List(gate.putts) { received in
-                    puttRow(received)
+        ScrollView {
+            VStack(spacing: 14) {
+                connectionPill
+                sessionSetup
+                if let latest = gate.putts.first {
+                    latestPutt(latest.putt)
+                }
+                if gate.putts.isEmpty {
+                    readyCard
+                } else {
+                    VStack(alignment: .leading, spacing: 10) {
+                        PGSectionHeader("This session")
+                        sessionPutts
+                    }
                 }
             }
+            .padding(.horizontal, 20)
+            .padding(.top, 4)
+            .padding(.bottom, 24)
         }
+    }
+
+    private var connectionPill: some View {
+        HStack(spacing: 10) {
+            Circle().fill(Color.pgAccent2_500).frame(width: 8, height: 8)
+            Text("Connected to \(gate.connectedName ?? "gate")")
+                .font(.pgBody(14))
+                .foregroundStyle(Color.pgText)
+            Spacer()
+            Button("Disconnect") { gate.disconnect() }
+                .buttonStyle(PGGhostButtonStyle(size: 13))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .pgCard()
     }
 
     // MARK: Session setup
@@ -102,16 +165,7 @@ struct GateView: View {
     /// break. Chosen before rolling; applied to the session once the gate starts
     /// it (its first putt). Changing one mid-session re-tags the active session.
     private var sessionSetup: some View {
-        VStack(spacing: 10) {
-            HStack {
-                Text("Session")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                if let error = config.loadError {
-                    Text(error)
-                        .font(.caption).foregroundStyle(.orange)
-                }
-            }
+        VStack(spacing: 0) {
             setupRow(label: "Putter") {
                 Picker("Putter", selection: $config.selectedPutterId) {
                     Text("None").tag(String?.none)
@@ -121,6 +175,7 @@ struct GateView: View {
                     }
                 }
             }
+            PGDivider()
             setupRow(label: "Length") {
                 Picker("Length", selection: $config.lengthFeet) {
                     Text("Not set").tag(Int?.none)
@@ -129,6 +184,7 @@ struct GateView: View {
                     }
                 }
             }
+            PGDivider()
             setupRow(label: "Break") {
                 Picker("Break", selection: $config.breakType) {
                     Text("Not set").tag(String?.none)
@@ -138,8 +194,7 @@ struct GateView: View {
                 }
             }
         }
-        .padding()
-        .background(.thinMaterial)
+        .pgCard()
         // Re-tag the live session if a pick changes after putts have started.
         .onChange(of: config.selectedPutterId) { gate.reapplyMetadata() }
         .onChange(of: config.lengthFeet) { gate.reapplyMetadata() }
@@ -151,26 +206,52 @@ struct GateView: View {
         label: String, @ViewBuilder _ picker: () -> P
     ) -> some View {
         HStack {
-            Text(label).foregroundStyle(.secondary)
+            Text(label)
+                .font(.pgBody(15))
+                .foregroundStyle(Color.pgNeutral700)
             Spacer()
             picker()
                 .pickerStyle(.menu)
                 .labelsHidden()
+                .tint(.pgAccent)
         }
-        .font(.subheadline)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
     }
 
-    private var connectionPill: some View {
-        HStack {
-            Circle().fill(.green).frame(width: 8, height: 8)
-            Text("Connected to \(gate.connectedName ?? "gate")")
-                .font(.subheadline)
-            Spacer()
-            Button("Disconnect") { gate.disconnect() }
-                .font(.subheadline)
+    // MARK: Latest putt
+
+    private func latestPutt(_ putt: GatePutt) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            PGSectionHeader("Latest putt")
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("\(putt.magnitudeMm, specifier: "%.1f") mm")
+                    .font(.pgHeading(40, relativeTo: .largeTitle))
+                    .foregroundStyle(Color.pgText)
+                PGTag(biasTag(putt), style: putt.golferSide == .center ? .accent2 : .accent)
+            }
+            HStack(spacing: 16) {
+                if let speed = putt.speedMps {
+                    Text("\(speed, specifier: "%.2f") m/s")
+                        .font(.pgBody(13))
+                        .foregroundStyle(Color.pgNeutral700)
+                }
+                sensorDots(putt.sensors)
+            }
         }
-        .padding(.horizontal).padding(.vertical, 10)
-        .background(.thinMaterial)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .pgCard()
+    }
+
+    private var sessionPutts: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(gate.putts.enumerated()), id: \.element.id) { index, received in
+                puttRow(received)
+                if index < gate.putts.count - 1 { PGDivider() }
+            }
+        }
+        .pgCard()
     }
 
     private func puttRow(_ received: ReceivedPutt) -> some View {
@@ -178,39 +259,106 @@ struct GateView: View {
         return HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(putt.golferSideLabel) · \(putt.magnitudeMm, specifier: "%.1f") mm")
-                    .font(.headline)
-                HStack(spacing: 8) {
-                    if let speed = putt.speedMps {
-                        Text("\(speed, specifier: "%.2f") m/s")
-                    }
-                    if let sensors = putt.sensors {
-                        Text(sensorSummary(sensors))
-                            .font(.system(.caption, design: .monospaced))
-                    }
+                    .font(.pgBody(15, weight: .semibold))
+                    .foregroundStyle(Color.pgText)
+                if let speed = putt.speedMps {
+                    Text("\(speed, specifier: "%.2f") m/s")
+                        .font(.pgBody(12))
+                        .foregroundStyle(Color.pgNeutral700)
                 }
-                .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
             relayBadge(received.relay)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
     }
 
     @ViewBuilder
     private func relayBadge(_ status: RelayStatus) -> some View {
         switch status {
         case .sending:
-            ProgressView()
+            ProgressView().controlSize(.small)
         case .sent:
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            Image(systemName: "checkmark.circle")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Color.pgAccent2_600)
         case .failed:
-            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Color.pgAccent)
         }
+    }
+
+    private var readyCard: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "figure.golf")
+                .font(.system(size: 34))
+                .foregroundStyle(Color.pgAccent2_600)
+            Text("Ready")
+                .font(.pgHeading(20, relativeTo: .title3))
+                .foregroundStyle(Color.pgText)
+            Text("Roll a putt through the gate.")
+                .font(.pgBody(13))
+                .foregroundStyle(Color.pgNeutral700)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 36)
+        .pgCard()
+    }
+
+    // MARK: Status states
+
+    private func statusView(icon: String, title: String, detail: String) -> some View {
+        VStack {
+            Spacer()
+            VStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 40))
+                    .foregroundStyle(Color.pgAccent)
+                Text(title)
+                    .font(.pgHeading(20, relativeTo: .title3))
+                    .foregroundStyle(Color.pgText)
+                Text(detail)
+                    .font(.pgBody(14))
+                    .foregroundStyle(Color.pgNeutral700)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(28)
+            .pgCard()
+            Spacer()
+            Spacer()
+        }
+        .padding(.horizontal, 20)
     }
 
     // MARK: Helpers
 
-    private func statusMessage(icon: String, title: String, detail: String) -> some View {
-        ContentUnavailableView(title, systemImage: icon, description: Text(detail))
+    /// The tag next to the latest putt, e.g. "Push · Right" (a right miss is a
+    /// push; a left miss a pull). Dead-center putts read simply "Center".
+    private func biasTag(_ putt: GatePutt) -> String {
+        switch putt.golferSide {
+        case .right: return "Push · Right"
+        case .left: return "Pull · Left"
+        case .center: return "Center"
+        }
+    }
+
+    /// One dot per gate sensor — sage when that sensor saw the ball. Every shown
+    /// putt tripped all its sensors (see `GatePutt.hasAllSensors`), so these read
+    /// as a compact "clean pass" indicator.
+    @ViewBuilder
+    private func sensorDots(_ sensors: [Double?]?) -> some View {
+        if let sensors, !sensors.isEmpty {
+            HStack(spacing: 5) {
+                ForEach(Array(sensors.enumerated()), id: \.offset) { _, value in
+                    Circle()
+                        .fill(value == nil ? Color.pgNeutral400 : Color.pgAccent2_500)
+                        .frame(width: 7, height: 7)
+                }
+            }
+        }
     }
 
     private func signalLabel(_ rssi: Int) -> String {
@@ -220,18 +368,5 @@ struct GateView: View {
         case (-70)..<(-55): return "Good signal"
         default: return "Weak signal"
         }
-    }
-
-    /// The per-sensor offsets in the golfer's frame, e.g. "+6.1 / +5.9 / +6.0"
-    /// (+ = right). The raw device sign is already the golfer's frame (see
-    /// `GatePutt.golferSide`), so show it directly. A sensor with no reading
-    /// shows a dash.
-    private func sensorSummary(_ sensors: [Double?]) -> String {
-        sensors.map { value in
-            guard let value else { return "—" }
-            let sign = value > 0 ? "+" : (value < 0 ? "−" : "")
-            return sign + String(format: "%.1f", abs(value))
-        }
-        .joined(separator: " / ")
     }
 }
