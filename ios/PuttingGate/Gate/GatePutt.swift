@@ -61,4 +61,26 @@ extension GatePutt {
         guard let sensors, !sensors.isEmpty else { return false }
         return !sensors.contains(where: { $0 == nil })
     }
+
+    /// A copy of this putt with a center calibration applied: each per-sensor
+    /// offset has its measured baseline subtracted, the average offset is
+    /// recomputed from the corrected sensors, and the label is re-derived so it
+    /// stays consistent with the corrected value. Returns an unchanged copy if
+    /// there are no sensors to correct.
+    func applying(_ calibration: GateCalibration) -> GatePutt {
+        guard let sensors else { return self }
+        let corrected = calibration.correctedSensors(sensors)
+        let present = corrected.compactMap { $0 }
+        let avg = present.isEmpty
+            ? offsetMm
+            : present.reduce(0, +) / Double(present.count)
+        return GatePutt(
+            sessionID: sessionID,
+            puttIndex: puttIndex,
+            offsetMm: avg,
+            label: GateCalibration.label(forOffsetMm: avg),
+            speedMps: speedMps,
+            sensors: corrected
+        )
+    }
 }

@@ -9,6 +9,7 @@ struct PuttingGateApp: App {
     @StateObject private var auth: AuthManager
     @StateObject private var config: SessionConfigStore
     @StateObject private var history: SessionHistoryStore
+    @StateObject private var calibration: CalibrationStore
     @StateObject private var gate: GateConnection
 
     init() {
@@ -26,12 +27,16 @@ struct PuttingGateApp: App {
         let service = SessionMetadataService(settings: settings, auth: auth)
         let config = SessionConfigStore(service: service)
         let history = SessionHistoryStore(service: service)
-        let gate = GateConnection(settings: settings, auth: auth, config: config)
+        let calibration = CalibrationStore()
+        let gate = GateConnection(
+            settings: settings, auth: auth, config: config, calibration: calibration
+        )
 
         _settings = StateObject(wrappedValue: settings)
         _auth = StateObject(wrappedValue: auth)
         _config = StateObject(wrappedValue: config)
         _history = StateObject(wrappedValue: history)
+        _calibration = StateObject(wrappedValue: calibration)
         _gate = StateObject(wrappedValue: gate)
     }
 
@@ -42,6 +47,7 @@ struct PuttingGateApp: App {
                 .environmentObject(auth)
                 .environmentObject(config)
                 .environmentObject(history)
+                .environmentObject(calibration)
                 .environmentObject(gate)
                 .tint(.pgAccent)
         }

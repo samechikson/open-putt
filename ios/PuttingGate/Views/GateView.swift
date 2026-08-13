@@ -6,8 +6,10 @@ import UIKit
 struct GateView: View {
     @EnvironmentObject private var gate: GateConnection
     @EnvironmentObject private var config: SessionConfigStore
+    @EnvironmentObject private var calibration: CalibrationStore
 
     @State private var ringSpin = false
+    @State private var showingCalibration = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -125,6 +127,7 @@ struct GateView: View {
         ScrollView {
             VStack(spacing: 14) {
                 connectionPill
+                calibrationCard
                 sessionSetup
                 if let latest = gate.putts.first {
                     latestPutt(latest.putt)
@@ -142,6 +145,7 @@ struct GateView: View {
             .padding(.top, 4)
             .padding(.bottom, 24)
         }
+        .sheet(isPresented: $showingCalibration) { CalibrationView() }
     }
 
     private var connectionPill: some View {
@@ -157,6 +161,59 @@ struct GateView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .pgCard()
+    }
+
+    // MARK: Center calibration
+
+    /// Status of the center calibration, with a button to (re)capture it and, when
+    /// one is set, to clear it. Applied to every putt so centered rolls read ~0.
+    private var calibrationCard: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: "scope")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(calibration.active != nil ? Color.pgAccent2_600 : Color.pgNeutral500)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Center calibration")
+                        .font(.pgBody(15, weight: .semibold))
+                        .foregroundStyle(Color.pgText)
+                    Text(calibrationSubtitle)
+                        .font(.pgBody(12))
+                        .foregroundStyle(Color.pgNeutral700)
+                }
+                Spacer()
+                Button(calibration.active != nil ? "Recalibrate" : "Calibrate") {
+                    showingCalibration = true
+                }
+                .buttonStyle(PGGhostButtonStyle(size: 13))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            if calibration.active != nil {
+                PGDivider()
+                Button { calibration.clear() } label: {
+                    HStack {
+                        Text("Clear calibration")
+                            .font(.pgBody(13, weight: .semibold))
+                            .foregroundStyle(Color.pgAccent700)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .pgCard()
+    }
+
+    private var calibrationSubtitle: String {
+        guard let cal = calibration.active else { return "Not set — readings are raw" }
+        let rolls = "\(cal.sampleCount) roll\(cal.sampleCount == 1 ? "" : "s")"
+        let date = cal.capturedAt.formatted(date: .abbreviated, time: .omitted)
+        return "\(rolls) · \(date)"
     }
 
     // MARK: Session setup

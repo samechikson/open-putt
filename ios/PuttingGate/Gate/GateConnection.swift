@@ -60,6 +60,7 @@ final class GateConnection: NSObject, ObservableObject {
     private var gate: CBPeripheral?
     private let relay: GatePuttRelay
     private let config: SessionConfigStore
+    private let calibration: CalibrationStore
     private let decoder = JSONDecoder()
 
     /// The firmware session id of the last putt seen. When the next putt carries a
@@ -70,9 +71,13 @@ final class GateConnection: NSObject, ObservableObject {
     /// split rather than re-tagging putts already rolled.
     private var startNewSessionRequested = false
 
-    init(settings: AppSettings, auth: AuthManager, config: SessionConfigStore) {
+    init(
+        settings: AppSettings, auth: AuthManager, config: SessionConfigStore,
+        calibration: CalibrationStore
+    ) {
         self.relay = GatePuttRelay(settings: settings, auth: auth)
         self.config = config
+        self.calibration = calibration
         super.init()
         // nil queue → callbacks are delivered on the main thread.
         central = CBCentralManager(delegate: self, queue: nil)
@@ -128,11 +133,7 @@ final class GateConnection: NSObject, ObservableObject {
 
     // MARK: Relay
 
-    private func relayPutt(_ putt: GatePutt, json: Data, sessionId: String, tagSession: Bool) {
-        // The BLE payload is the exact `/device/putts` body, relayed verbatim —
-        // except when we've split the firmware's run into a new session, where the
-        // outgoing session id must be swapped for the one we minted.
-        let body = Self.rewritingSessionId(in: json, from: putt.sessionID, to: sessionId)
+    private func relayPutt(_ putt: GatePutt, body: Data, sessionId: String, tagSession: Bool) {
         Task {
             do {
                 try await relay.send(body)
@@ -151,14 +152,25 @@ final class GateConnection: NSObject, ObservableObject {
         }
     }
 
-    /// Return the putt JSON with its `session_id` swapped to `to`, or the bytes
-    /// unchanged when the ids already match (the common, verbatim-relay case).
-    private static func rewritingSessionId(in json: Data, from: String, to: String) -> Data {
-        guard from != to,
-              var obj = (try? JSONSerialization.jsonObject(with: json)) as? [String: Any]
-        else { return json }
-        obj["session_id"] = to
-        return (try? JSONSerialization.data(withJSONObject: obj)) ?? json
+    /// The `/device/putts` body to relay for `raw`: the BLE payload verbatim,
+    /// except where we've diverged from it — a session split swaps `session_id`,
+    /// and a center calibration replaces `offset_mm` / `label` / `sensors` with
+    /// the corrected values (`corrected` is `raw.applying(calibration)` or `raw`).
+    private static func outgoingBody(
+        rawJSON: Data, raw: GatePutt, corrected: GatePutt, sessionId: String
+    ) -> Data {
+        var overrides: [String: Any] = [:]
+        if sessionId != raw.sessionID { overrides["session_id"] = sessionId }
+        if corrected.offsetMm != raw.offsetMm { overrides["offset_mm"] = corrected.offsetMm }
+        if corrected.label != raw.label { overrides["label"] = corrected.label }
+        if let sensors = corrected.sensors, sensors != raw.sensors {
+            overrides["sensors"] = sensors.map { $0.map { $0 as Any } ?? NSNull() }
+        }
+        guard !overrides.isEmpty,
+              var obj = (try? JSONSerialization.jsonObject(with: rawJSON)) as? [String: Any]
+        else { return rawJSON }
+        for (key, value) in overrides { obj[key] = value }
+        return (try? JSONSerialization.data(withJSONObject: obj)) ?? rawJSON
     }
 
     private func setStatus(_ id: String, _ status: RelayStatus) {
@@ -247,6 +259,13 @@ extension GateConnection: CBCentralManagerDelegate, CBPeripheralDelegate {
         // and never treated as the start of a session. Mirrors the firmware and
         // backend guards.
         guard putt.hasAllSensors else { return }
+        // In calibration mode a centered jig roll trains the baseline instead of
+        // being recorded as a putt — don't relay it, list it, or start a session.
+        // (The delegate runs on the main thread, so touching the store is safe.)
+        if calibration.isCalibrating {
+            calibration.record(sensors: (putt.sensors ?? []).compactMap { $0 })
+            return
+        }
         // A new session starts when the gate begins a new run (a putt bearing a
         // firmware session id we haven't seen) or when the player changed the
         // length/break mid-run (`startNewSessionRequested`).
@@ -262,8 +281,14 @@ extension GateConnection: CBCentralManagerDelegate, CBPeripheralDelegate {
             startNewSessionRequested = false
             putts.removeAll()   // "This session" begins fresh
         }
-        putts.insert(ReceivedPutt(putt: putt), at: 0)   // newest first
-        relayPutt(putt, json: data, sessionId: activeSessionId ?? putt.sessionID,
-                  tagSession: isNewSession)
+        let sessionId = activeSessionId ?? putt.sessionID
+        // Apply the active center calibration (if any) so the displayed and
+        // relayed reading is the corrected, consistent one.
+        let corrected = calibration.active.map { putt.applying($0) } ?? putt
+        let body = Self.outgoingBody(
+            rawJSON: data, raw: putt, corrected: corrected, sessionId: sessionId
+        )
+        putts.insert(ReceivedPutt(putt: corrected), at: 0)   // newest first
+        relayPutt(corrected, body: body, sessionId: sessionId, tagSession: isNewSession)
     }
 }
