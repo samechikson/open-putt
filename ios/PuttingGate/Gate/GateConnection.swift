@@ -49,9 +49,11 @@ final class GateConnection: NSObject, ObservableObject {
     @Published private(set) var discovered: [DiscoveredGate] = []
     @Published private(set) var putts: [ReceivedPutt] = []
     @Published private(set) var connectedName: String?
-    /// The session id of the current run of putts (the firmware mints it and
-    /// stamps every putt with it). Tracked so we can tell when a new session
-    /// starts — its first putt carries a session id we haven't seen — and tag it.
+    /// The backend session id the current run of putts is being relayed under.
+    /// Usually this is the id the firmware mints and stamps on every putt, but a
+    /// mid-run change to the putt length or break splits the run into a fresh
+    /// session (see `startNewSession()`), so this can diverge from the firmware's
+    /// id. Tracked so we can tag the session and re-tag it on a putter change.
     @Published private(set) var activeSessionId: String?
 
     private var central: CBCentralManager!
@@ -59,6 +61,14 @@ final class GateConnection: NSObject, ObservableObject {
     private let relay: GatePuttRelay
     private let config: SessionConfigStore
     private let decoder = JSONDecoder()
+
+    /// The firmware session id of the last putt seen. When the next putt carries a
+    /// different id the gate has started a new run (a genuinely new session).
+    private var firmwareSessionId: String?
+    /// Set when the player changes the length or break mid-run: the next putt
+    /// should open a new backend session so the new selection describes a clean
+    /// split rather than re-tagging putts already rolled.
+    private var startNewSessionRequested = false
 
     init(settings: AppSettings, auth: AuthManager, config: SessionConfigStore) {
         self.relay = GatePuttRelay(settings: settings, auth: auth)
@@ -69,11 +79,23 @@ final class GateConnection: NSObject, ObservableObject {
     }
 
     /// Re-tag the active session with the player's current selection — called
-    /// when they change a setup picker after putts have already started. No-op
-    /// until a session exists.
+    /// when they change the putter after putts have already started. No-op until a
+    /// session exists.
     func reapplyMetadata() {
         guard let sessionId = activeSessionId else { return }
         Task { await config.apply(to: sessionId) }
+    }
+
+    /// Begin a new session for subsequent putts — called when the player changes
+    /// the putt length or break. Before the first putt there's nothing to split:
+    /// the pending selection simply tags the session the gate is about to create.
+    /// Once a session is active, the next putt opens a fresh backend session
+    /// carrying the new selection, so a run at a new length/break is recorded
+    /// separately from what came before. No empty session is created if no further
+    /// putt is rolled.
+    func startNewSession() {
+        guard activeSessionId != nil else { return }
+        startNewSessionRequested = true
     }
 
     // MARK: Intent
@@ -106,16 +128,20 @@ final class GateConnection: NSObject, ObservableObject {
 
     // MARK: Relay
 
-    private func relayPutt(_ putt: GatePutt, json: Data, tagSession: Bool) {
+    private func relayPutt(_ putt: GatePutt, json: Data, sessionId: String, tagSession: Bool) {
+        // The BLE payload is the exact `/device/putts` body, relayed verbatim —
+        // except when we've split the firmware's run into a new session, where the
+        // outgoing session id must be swapped for the one we minted.
+        let body = Self.rewritingSessionId(in: json, from: putt.sessionID, to: sessionId)
         Task {
             do {
-                try await relay.send(json)
+                try await relay.send(body)
                 await MainActor.run { self.setStatus(putt.id, .sent) }
                 // The session row is created backend-side by its first putt, so
                 // only now — once that putt is saved — can we tag the session
                 // with the player's chosen putter / length / break.
                 if tagSession {
-                    await config.apply(to: putt.sessionID)
+                    await config.apply(to: sessionId)
                 }
             } catch {
                 await MainActor.run {
@@ -123,6 +149,16 @@ final class GateConnection: NSObject, ObservableObject {
                 }
             }
         }
+    }
+
+    /// Return the putt JSON with its `session_id` swapped to `to`, or the bytes
+    /// unchanged when the ids already match (the common, verbatim-relay case).
+    private static func rewritingSessionId(in json: Data, from: String, to: String) -> Data {
+        guard from != to,
+              var obj = (try? JSONSerialization.jsonObject(with: json)) as? [String: Any]
+        else { return json }
+        obj["session_id"] = to
+        return (try? JSONSerialization.data(withJSONObject: obj)) ?? json
     }
 
     private func setStatus(_ id: String, _ status: RelayStatus) {
@@ -211,11 +247,23 @@ extension GateConnection: CBCentralManagerDelegate, CBPeripheralDelegate {
         // and never treated as the start of a session. Mirrors the firmware and
         // backend guards.
         guard putt.hasAllSensors else { return }
-        // A putt bearing a session id we haven't seen marks a new session; tag it
-        // (with the player's setup selection) once its first putt is relayed.
-        let isNewSession = putt.sessionID != activeSessionId
-        if isNewSession { activeSessionId = putt.sessionID }
+        // A new session starts when the gate begins a new run (a putt bearing a
+        // firmware session id we haven't seen) or when the player changed the
+        // length/break mid-run (`startNewSessionRequested`).
+        let firmwareChanged = putt.sessionID != firmwareSessionId
+        firmwareSessionId = putt.sessionID
+        let isNewSession = firmwareChanged || startNewSessionRequested
+        if isNewSession {
+            // A fresh firmware run already carries a new session id we can relay
+            // verbatim; a mid-run length/break split has none, so mint one.
+            activeSessionId = (startNewSessionRequested && !firmwareChanged)
+                ? UUID().uuidString.lowercased()
+                : putt.sessionID
+            startNewSessionRequested = false
+            putts.removeAll()   // "This session" begins fresh
+        }
         putts.insert(ReceivedPutt(putt: putt), at: 0)   // newest first
-        relayPutt(putt, json: data, tagSession: isNewSession)
+        relayPutt(putt, json: data, sessionId: activeSessionId ?? putt.sessionID,
+                  tagSession: isNewSession)
     }
 }

@@ -163,7 +163,9 @@ struct GateView: View {
 
     /// Dropdowns to tag the session — the putter used, the putt length, and the
     /// break. Chosen before rolling; applied to the session once the gate starts
-    /// it (its first putt). Changing one mid-session re-tags the active session.
+    /// it (its first putt). Changing the putter mid-session re-tags the active
+    /// session; changing the length or break starts a new session for the putts
+    /// that follow.
     private var sessionSetup: some View {
         VStack(spacing: 0) {
             setupRow(label: "Putter") {
@@ -195,10 +197,11 @@ struct GateView: View {
             }
         }
         .pgCard()
-        // Re-tag the live session if a pick changes after putts have started.
+        // A putter change re-tags the live session; a length or break change
+        // starts a new session for the putts that follow.
         .onChange(of: config.selectedPutterId) { gate.reapplyMetadata() }
-        .onChange(of: config.lengthFeet) { gate.reapplyMetadata() }
-        .onChange(of: config.breakType) { gate.reapplyMetadata() }
+        .onChange(of: config.lengthFeet) { gate.startNewSession() }
+        .onChange(of: config.breakType) { gate.startNewSession() }
     }
 
     /// A labeled row holding a menu-style picker (value on the right).
