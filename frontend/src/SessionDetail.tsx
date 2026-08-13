@@ -321,19 +321,41 @@ export default function SessionDetail({
     }
   };
 
+  const errorCardStyle = {
+    fontSize: 14,
+    color: "var(--color-accent-800)",
+  } as const;
+
   return (
     <>
-      <div className="flex items-center justify-between gap-4 mb-6">
-        <h2 className="text-xl font-bold text-white truncate">
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 16,
+          marginBottom: 24,
+          flexWrap: "wrap",
+        }}
+      >
+        <div
+          style={{
+            fontFamily: "var(--font-heading)",
+            fontSize: 24,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
           {session?.file_name ?? "Session"}
-        </h2>
-        <div className="flex items-center gap-2 shrink-0">
+        </div>
+        <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>
           {session && session.video_path && !pending && (
             <button
               type="button"
               onClick={handleReanalyze}
               disabled={reanalyzing}
-              className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] disabled:opacity-50 rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
+              className="btn btn-secondary"
             >
               {reanalyzing ? "Starting…" : "Re-analyze"}
             </button>
@@ -343,36 +365,44 @@ export default function SessionDetail({
               type="button"
               onClick={handleDelete}
               disabled={deleting}
-              className="px-4 py-2 bg-[#2a1a1a] border border-[#4a2a2a] hover:bg-[#3a2020] disabled:opacity-50 rounded-lg text-sm text-[#f87171] font-medium transition-all cursor-pointer"
+              className="btn btn-secondary"
+              style={{ color: "var(--color-accent-800)" }}
             >
               {deleting ? "Deleting…" : "Delete"}
             </button>
           )}
-          <button
-            type="button"
-            onClick={onBack}
-            className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
-          >
+          <button type="button" onClick={onBack} className="btn btn-secondary">
             ← Sessions
           </button>
         </div>
       </div>
 
       {actionError && (
-        <div className="bg-[#1a1a1a] border border-[#3a2020] rounded-xl p-4 mb-6 text-sm text-[#f87171]">
+        <div
+          className="card elev-sm"
+          style={{ ...errorCardStyle, marginBottom: 24 }}
+        >
           {actionError}
         </div>
       )}
 
       {sessionQuery.isPending && (
-        <div className="flex items-center gap-2 text-sm text-[#888]">
-          <span className="w-3.5 h-3.5 border-2 border-[#22c55e] border-t-transparent rounded-full animate-spin" />
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: 14,
+            color: "var(--color-neutral-600)",
+          }}
+        >
+          <span className="spinner" />
           Loading…
         </div>
       )}
 
       {(sessionQuery.isError || session === null) && (
-        <div className="bg-[#1a1a1a] border border-[#3a2020] rounded-xl p-5 text-sm text-[#f87171]">
+        <div className="card elev-sm" style={errorCardStyle}>
           {sessionQuery.error instanceof Error
             ? sessionQuery.error.message
             : session === null
@@ -382,16 +412,22 @@ export default function SessionDetail({
       )}
 
       {session && (
-        <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5 mb-6">
-          <div className="flex items-center justify-between gap-4 mb-3">
-            <h3 className="text-xs font-semibold uppercase tracking-widest text-[#aaa]">
-              Putt Details
-            </h3>
+        <div className="card elev-sm" style={{ marginBottom: 24 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: 14,
+            }}
+          >
+            <span className="kicker">Putt Details</span>
             {editing == null && (
               <button
                 type="button"
                 onClick={startEditing}
-                className="px-3 py-1.5 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-xs text-white font-medium transition-all cursor-pointer"
+                className="btn btn-ghost"
+                style={{ padding: "6px 14px", fontSize: 13 }}
               >
                 Edit
               </button>
@@ -399,34 +435,60 @@ export default function SessionDetail({
           </div>
 
           {editing == null ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 1fr)",
+                gap: 20,
+              }}
+            >
               <div>
-                <div className="text-white font-semibold">
+                <div style={{ fontWeight: 600 }}>
                   {session.length_feet == null
                     ? "—"
                     : `${session.length_feet} ft`}
                 </div>
-                <p className="text-sm text-[#aaa]">distance</p>
+                <div style={{ fontSize: 13, color: "var(--color-neutral-600)" }}>
+                  distance
+                </div>
               </div>
               <div>
-                <div className="text-white font-semibold">
+                <div style={{ fontWeight: 600 }}>
                   {breakTypeLabel(session.break_type) ?? "—"}
                 </div>
-                <p className="text-sm text-[#aaa]">putt type</p>
+                <div style={{ fontSize: 13, color: "var(--color-neutral-600)" }}>
+                  putt type
+                </div>
               </div>
               <div>
-                <div className="text-white font-semibold truncate">
+                <div
+                  style={{
+                    fontWeight: 600,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
                   {sessionPutter?.name ?? "—"}
                 </div>
-                <p className="text-sm text-[#aaa]">putter</p>
+                <div style={{ fontSize: 13, color: "var(--color-neutral-600)" }}>
+                  putter
+                </div>
               </div>
             </div>
           ) : (
-            <div className="flex flex-col gap-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <label className="flex flex-col gap-1">
-                  <span className="text-sm text-[#aaa]">Distance (feet)</span>
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                  gap: 16,
+                }}
+              >
+                <div className="field">
+                  <label>Distance (feet)</label>
                   <input
+                    className="input"
                     type="number"
                     min={0}
                     inputMode="numeric"
@@ -437,19 +499,18 @@ export default function SessionDetail({
                       )
                     }
                     placeholder="—"
-                    className="bg-[#222] border border-[#333] focus:border-[#22c55e] rounded-lg text-sm text-white px-3 py-2 focus:outline-none"
                   />
-                </label>
-                <label className="flex flex-col gap-1">
-                  <span className="text-sm text-[#aaa]">Putt type</span>
+                </div>
+                <div className="field">
+                  <label>Putt type</label>
                   <select
+                    className="input"
                     value={editing.breakType}
                     onChange={(e) =>
                       setEditing((d) =>
                         d ? { ...d, breakType: e.target.value } : d,
                       )
                     }
-                    className="bg-[#222] border border-[#333] focus:border-[#22c55e] rounded-lg text-sm text-white px-3 py-2 cursor-pointer focus:outline-none"
                   >
                     <option value="">—</option>
                     {BREAK_TYPES.map((b) => (
@@ -458,17 +519,17 @@ export default function SessionDetail({
                       </option>
                     ))}
                   </select>
-                </label>
-                <label className="flex flex-col gap-1">
-                  <span className="text-sm text-[#aaa]">Putter</span>
+                </div>
+                <div className="field">
+                  <label>Putter</label>
                   <select
+                    className="input"
                     value={editing.putterId}
                     onChange={(e) =>
                       setEditing((d) =>
                         d ? { ...d, putterId: e.target.value } : d,
                       )
                     }
-                    className="bg-[#222] border border-[#333] focus:border-[#22c55e] rounded-lg text-sm text-white px-3 py-2 cursor-pointer focus:outline-none"
                   >
                     <option value="">—</option>
                     {putters.map((p) => (
@@ -478,17 +539,17 @@ export default function SessionDetail({
                       </option>
                     ))}
                   </select>
-                </label>
+                </div>
               </div>
               {saveError && (
-                <p className="text-sm text-[#f87171]">{saveError}</p>
+                <p style={{ margin: 0, ...errorCardStyle }}>{saveError}</p>
               )}
-              <div className="flex items-center gap-2">
+              <div style={{ display: "flex", gap: 10 }}>
                 <button
                   type="button"
                   onClick={handleSaveMetadata}
                   disabled={saving}
-                  className="px-4 py-2 bg-[#22c55e] hover:bg-[#16a34a] disabled:opacity-50 rounded-lg text-sm text-black font-semibold transition-all cursor-pointer"
+                  className="btn btn-primary"
                 >
                   {saving ? "Saving…" : "Save"}
                 </button>
@@ -496,7 +557,7 @@ export default function SessionDetail({
                   type="button"
                   onClick={() => setEditing(null)}
                   disabled={saving}
-                  className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] disabled:opacity-50 rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
+                  className="btn btn-ghost"
                 >
                   Cancel
                 </button>
@@ -507,34 +568,63 @@ export default function SessionDetail({
       )}
 
       {pending && (
-        <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-8 text-center">
-          <div className="flex items-center justify-center gap-2 text-[#aaa]">
-            <span className="w-4 h-4 border-2 border-[#22c55e] border-t-transparent rounded-full animate-spin" />
+        <div className="card elev-sm" style={{ padding: 56, textAlign: "center" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+              color: "var(--color-neutral-700)",
+              fontSize: 15,
+            }}
+          >
+            <span className="spinner" style={{ width: 18, height: 18 }} />
             {status === "queued"
               ? "Queued for analysis…"
               : "Analyzing your putts…"}
           </div>
-          <p className="text-xs text-[#666] mt-2">
+          <div
+            style={{
+              fontSize: 13,
+              color: "var(--color-neutral-500)",
+              marginTop: 8,
+            }}
+          >
             This can take a few minutes for a long clip. You can leave this page;
             it'll keep processing.
-          </p>
+          </div>
         </div>
       )}
 
       {status === "error" && (
         <>
-          <div className="bg-[#1a1a1a] border border-[#3a2020] rounded-xl p-5 text-sm text-[#f87171] mb-6">
+          <div
+            className="card elev-sm"
+            style={{ ...errorCardStyle, marginBottom: 24 }}
+          >
             {session?.error ?? "Analysis failed."}
           </div>
           {videoUrl && (
-            <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-3">
+            <div className="card elev-sm">
               <video
                 src={videoUrl}
                 controls
                 playsInline
-                className="w-full max-h-[28rem] rounded-lg bg-black"
+                className="w-full"
+                style={{
+                  maxHeight: "28rem",
+                  borderRadius: "var(--radius-md)",
+                  background: "#000",
+                }}
               />
-              <p className="text-xs text-[#666] mt-2 px-1">
+              <p
+                style={{
+                  fontSize: 12,
+                  color: "var(--color-neutral-600)",
+                  margin: "8px 4px 0",
+                }}
+              >
                 Your recording, kept so you can review what happened.
               </p>
             </div>
@@ -545,169 +635,241 @@ export default function SessionDetail({
       {(status === "done" || putts.length > 0) && (
         <>
           {videoUrl && (
-            <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-3 mb-6">
+            <div className="card elev-sm" style={{ marginBottom: 24, padding: 12 }}>
               <video
                 ref={videoRef}
                 src={videoUrl}
                 controls
                 playsInline
                 onTimeUpdate={handleTimeUpdate}
-                className="w-full max-h-[28rem] rounded-lg bg-black"
+                className="w-full"
+                style={{
+                  maxHeight: "28rem",
+                  borderRadius: "var(--radius-md)",
+                  background: "#000",
+                }}
               />
-              <p className="text-xs text-[#666] mt-2 px-1">
+              <p
+                style={{
+                  fontSize: 12,
+                  color: "var(--color-neutral-600)",
+                  margin: "8px 4px 0",
+                }}
+              >
                 Tap a putt below to jump to it.
               </p>
             </div>
           )}
 
-          <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5 mb-6">
-            <h3 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-3">
+          <div className="card elev-sm" style={{ marginBottom: 24 }}>
+            <h3 className="kicker" style={{ marginBottom: 16 }}>
               Session Averages · {putts.length} putt
               {putts.length === 1 ? "" : "s"}
             </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 1fr)",
+                gap: 20,
+              }}
+            >
               <div>
-                <div className="offset-value">{fmt(avgAbsOffset)} mm</div>
-                <p className="text-sm text-[#aaa] -mt-1">avg offset (accuracy)</p>
+                <div className="stat" style={{ fontSize: 28 }}>
+                  {fmt(avgAbsOffset)} mm
+                </div>
+                <div className="stat-sub">avg offset (accuracy)</div>
               </div>
               <div>
-                <div className="offset-value">
+                <div className="stat" style={{ fontSize: 28 }}>
                   {bias == null ? "—" : `${Math.abs(bias).toFixed(1)} mm`}
                 </div>
-                <p className="text-sm text-[#aaa] -mt-1">
+                <div className="stat-sub">
                   {bias == null
                     ? "directional bias"
                     : biasSide === "center"
                       ? "no directional bias"
                       : `${biasWord(biasSide)} bias`}
-                </p>
+                </div>
               </div>
               <div>
-                <div className="offset-value">
+                <div className="stat" style={{ fontSize: 28 }}>
                   {speedDispersion == null
                     ? "—"
                     : `± ${speedDispersion.toFixed(2)}`}{" "}
                   m/s
                 </div>
-                <p className="text-sm text-[#aaa] -mt-1">
-                  speed dispersion (consistency)
-                </p>
+                <div className="stat-sub">speed dispersion (consistency)</div>
               </div>
             </div>
           </div>
 
           {putts.length > 0 && (
-            <div className="flex flex-col lg:flex-row gap-6">
-              <div className="flex-1 min-w-0 bg-[#1a1a1a] border border-[#333] rounded-xl overflow-x-auto">
-                <table className="w-full text-sm min-w-[20rem]">
-                  <thead>
-                    <tr className="text-left text-xs uppercase tracking-widest text-[#888] border-b border-[#333]">
-                      <th className="px-4 py-3 font-semibold">#</th>
-                      <th className="px-4 py-3 font-semibold">Offset</th>
-                      <th className="px-4 py-3 font-semibold">Direction</th>
-                      <th className="px-4 py-3 font-semibold">Speed</th>
-                      {hasSensors && (
-                        <th
-                          className="px-4 py-3 font-semibold"
-                          title="Per-sensor offset (golfer's view; + = right)"
-                        >
-                          Sensors (mm)
+            <div
+              style={{
+                display: "flex",
+                gap: 24,
+                alignItems: "flex-start",
+                flexWrap: "wrap",
+              }}
+            >
+              <div
+                className="card elev-sm"
+                style={{
+                  flex: "1 1 700px",
+                  padding: 0,
+                  overflow: "hidden",
+                  minWidth: 0,
+                }}
+              >
+                <div style={{ overflowX: "auto" }}>
+                  <table className="table" style={{ minWidth: "20rem" }}>
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Offset</th>
+                        <th>Direction</th>
+                        <th>Speed</th>
+                        {hasSensors && (
+                          <th title="Per-sensor offset (golfer's view; + = right)">
+                            Sensors (mm)
+                          </th>
+                        )}
+                        <th>
+                          <span className="sr-only">Actions</span>
                         </th>
-                      )}
-                      <th className="px-4 py-3">
-                        <span className="sr-only">Actions</span>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {putts.map((p) => {
-                      const selected = p.putt_index === selectedPutt?.putt_index;
-                      return (
-                        <tr
-                          key={p.putt_index}
-                          onClick={() => handlePuttClick(p)}
-                          className={`border-b border-[#262626] last:border-0 cursor-pointer hover:bg-[#222] ${
-                            selected ? "bg-[#222]" : ""
-                          }`}
-                        >
-                          <td className="px-4 py-3 text-[#aaa]">
-                            {videoUrl && (
-                              <span className="text-[#22c55e] mr-1">▶</span>
-                            )}
-                            {p.putt_index + 1}
-                          </td>
-                          <td className="px-4 py-3 text-white">
-                            {p.offset_mm == null
-                              ? "—"
-                              : `${Math.abs(p.offset_mm).toFixed(1)} mm`}
-                          </td>
-                          <td className="px-4 py-3 text-[#aaa] capitalize">
-                            {/* Report the golfer's left/right, not the raw
-                                image-space `direction` (clips are filmed face-on,
-                                which mirrors it). Matches the session bias above. */}
-                            {p.offset_mm == null ? "—" : golferSide(p.offset_mm)}
-                          </td>
-                          <td className="px-4 py-3 text-[#aaa]">
-                            {p.speed_mps == null
-                              ? "—"
-                              : `${p.speed_mps.toFixed(2)} m/s`}
-                          </td>
-                          {hasSensors && (
-                            <td className="px-4 py-3 text-[#888] font-mono text-xs whitespace-nowrap">
-                              {p.sensor_offsets_mm == null
-                                ? "—"
-                                : p.sensor_offsets_mm
-                                    .map((v) => {
-                                      if (v == null) return "—";
-                                      // Golfer's view: undo the face-on mirror, as
-                                      // the Offset/Direction columns do.
-                                      const g = -v;
-                                      const sign = g > 0 ? "+" : g < 0 ? "−" : "";
-                                      return sign + Math.abs(g).toFixed(1);
-                                    })
-                                    .join(" / ")}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {putts.map((p) => {
+                        const selected =
+                          p.putt_index === selectedPutt?.putt_index;
+                        return (
+                          <tr
+                            key={p.putt_index}
+                            onClick={() => handlePuttClick(p)}
+                            style={{
+                              cursor: "pointer",
+                              background: selected
+                                ? "color-mix(in srgb, var(--color-accent) 12%, transparent)"
+                                : undefined,
+                            }}
+                          >
+                            <td>
+                              {videoUrl && (
+                                <span
+                                  style={{
+                                    color: "var(--color-accent)",
+                                    marginRight: 4,
+                                  }}
+                                >
+                                  ▶
+                                </span>
+                              )}
+                              {p.putt_index + 1}
                             </td>
-                          )}
-                          <td className="px-4 py-3 text-right">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                // Don't let the row's select/play click fire too.
-                                e.stopPropagation();
-                                void handleDeletePutt(p);
-                              }}
-                              disabled={deletingPutt === p.putt_index}
-                              title="Delete this putt"
-                              className="text-xs font-medium text-[#f87171] hover:text-[#fca5a5] disabled:opacity-50 cursor-pointer"
-                            >
-                              {deletingPutt === p.putt_index
-                                ? "Deleting…"
-                                : "Delete"}
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                            <td>
+                              {p.offset_mm == null
+                                ? "—"
+                                : `${Math.abs(p.offset_mm).toFixed(1)} mm`}
+                            </td>
+                            <td style={{ color: "var(--color-neutral-700)" }}>
+                              {/* Report the golfer's left/right, not the raw
+                                  image-space `direction` (clips are filmed
+                                  face-on, which mirrors it). Matches the session
+                                  bias above. */}
+                              {p.offset_mm == null
+                                ? "—"
+                                : golferSide(p.offset_mm)}
+                            </td>
+                            <td style={{ color: "var(--color-neutral-700)" }}>
+                              {p.speed_mps == null
+                                ? "—"
+                                : `${p.speed_mps.toFixed(2)} m/s`}
+                            </td>
+                            {hasSensors && (
+                              <td
+                                style={{
+                                  fontFamily: "ui-monospace, monospace",
+                                  fontSize: 12,
+                                  whiteSpace: "nowrap",
+                                  color: "var(--color-neutral-600)",
+                                }}
+                              >
+                                {p.sensor_offsets_mm == null
+                                  ? "—"
+                                  : p.sensor_offsets_mm
+                                      .map((v) => {
+                                        if (v == null) return "—";
+                                        // Golfer's view: undo the face-on
+                                        // mirror, as Offset/Direction do.
+                                        const g = -v;
+                                        const sign =
+                                          g > 0 ? "+" : g < 0 ? "−" : "";
+                                        return sign + Math.abs(g).toFixed(1);
+                                      })
+                                      .join(" / ")}
+                              </td>
+                            )}
+                            <td style={{ textAlign: "right" }}>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  // Don't let the row's select/play click fire.
+                                  e.stopPropagation();
+                                  void handleDeletePutt(p);
+                                }}
+                                disabled={deletingPutt === p.putt_index}
+                                title="Delete this putt"
+                                className="nav-link"
+                                style={{
+                                  color: "var(--color-accent-700)",
+                                  fontSize: 13,
+                                }}
+                              >
+                                {deletingPutt === p.putt_index
+                                  ? "Deleting…"
+                                  : "Delete"}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
                 {puttError && (
-                  <p className="px-4 py-3 text-sm text-[#f87171] border-t border-[#333]">
+                  <p
+                    style={{
+                      ...errorCardStyle,
+                      padding: "9px 13px",
+                      borderTop: "1px solid var(--color-divider)",
+                      margin: 0,
+                    }}
+                  >
                     {puttError}
                   </p>
                 )}
               </div>
 
-              <div className="lg:w-80 shrink-0 bg-[#1a1a1a] border border-[#333] rounded-xl p-4">
-                <h3 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-3">
+              <div className="card elev-sm" style={{ flex: "1 1 300px" }}>
+                <div className="kicker" style={{ marginBottom: 14 }}>
                   Crossing frame
-                </h3>
+                </div>
                 {selectedPutt == null ? (
-                  <p className="text-sm text-[#666]">
+                  <p style={{ margin: 0, fontSize: 14, color: "var(--color-neutral-600)" }}>
                     Select a putt to see where it crossed the gate.
                   </p>
                 ) : frameLoading ? (
-                  <div className="flex items-center gap-2 text-sm text-[#888]">
-                    <span className="w-3.5 h-3.5 border-2 border-[#22c55e] border-t-transparent rounded-full animate-spin" />
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      fontSize: 14,
+                      color: "var(--color-neutral-600)",
+                    }}
+                  >
+                    <span className="spinner" />
                     Loading frame…
                   </div>
                 ) : frameUrl ? (
@@ -715,17 +877,24 @@ export default function SessionDetail({
                     <img
                       src={frameUrl}
                       alt={`Putt ${selectedPutt.putt_index + 1} crossing the gate`}
-                      className="w-full rounded-lg bg-black"
+                      className="w-full"
+                      style={{ borderRadius: "var(--radius-md)", background: "#000" }}
                     />
-                    <p className="text-xs text-[#666] mt-2">
+                    <p
+                      style={{
+                        fontSize: 12,
+                        color: "var(--color-neutral-600)",
+                        marginTop: 10,
+                      }}
+                    >
                       Putt {selectedPutt.putt_index + 1} · at the gate line
                     </p>
                   </div>
                 ) : frameError ? (
-                  <p className="text-sm text-[#f87171]">{frameError}</p>
+                  <p style={{ margin: 0, ...errorCardStyle }}>{frameError}</p>
                 ) : (
                   // Legacy putt with no stored crossing frame: show nothing.
-                  <p className="text-sm text-[#666]">
+                  <p style={{ margin: 0, fontSize: 14, color: "var(--color-neutral-600)" }}>
                     Select a putt to see where it crossed the gate.
                   </p>
                 )}

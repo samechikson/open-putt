@@ -5,6 +5,7 @@ import {
   signInWithEmailAndPassword,
 } from "firebase/auth";
 import { auth } from "./firebaseClient";
+import Logo from "./Logo";
 
 type Mode = "signin" | "signup";
 
@@ -80,36 +81,61 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0d0d0d] text-[#d0d0d0] flex items-center justify-center px-4">
-      <div className="w-full max-w-sm">
-        <h1 className="text-2xl font-bold text-white mb-1 text-center">
-          Putting Gate
-        </h1>
-        <p className="text-sm text-[#888] mb-6 text-center">
-          {mode === "signin"
-            ? "Sign in to your account"
-            : "Create an account"}
-        </p>
+    <div
+      style={{
+        minHeight: "100svh",
+        background: "var(--color-bg)",
+        color: "var(--color-text)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 40,
+      }}
+    >
+      <div style={{ width: "100%", maxWidth: 360 }}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 10,
+            marginBottom: 28,
+          }}
+        >
+          <Logo size={44} />
+          <div style={{ fontFamily: "var(--font-heading)", fontSize: 26 }}>
+            Putting Gate
+          </div>
+          <div style={{ fontSize: 14, color: "var(--color-neutral-700)" }}>
+            {mode === "signin"
+              ? "Sign in to your account"
+              : "Create an account"}
+          </div>
+        </div>
 
         <form
           onSubmit={submit}
-          className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5 flex flex-col gap-3"
+          className="card elev-md"
+          style={{ gap: 16 }}
         >
-          <label className="text-xs font-semibold uppercase tracking-widest text-[#aaa]">
-            Email
+          <div className="field">
+            <label htmlFor="login-email">Email</label>
             <input
+              id="login-email"
+              className="input"
               type="email"
               required
               autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="mt-1 block w-full bg-[#111] border border-[#444] rounded-md text-sm text-white px-3 py-2 normal-case tracking-normal font-normal"
             />
-          </label>
+          </div>
 
-          <label className="text-xs font-semibold uppercase tracking-widest text-[#aaa]">
-            Password
+          <div className="field">
+            <label htmlFor="login-password">Password</label>
             <input
+              id="login-password"
+              className="input"
               type="password"
               required
               minLength={6}
@@ -118,17 +144,24 @@ export default function Login() {
               }
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="mt-1 block w-full bg-[#111] border border-[#444] rounded-md text-sm text-white px-3 py-2 normal-case tracking-normal font-normal"
             />
-          </label>
+          </div>
 
-          {error && <p className="text-xs text-[#f87171]">{error}</p>}
-          {notice && <p className="text-xs text-[#22c55e]">{notice}</p>}
+          {error && (
+            <p style={{ margin: 0, fontSize: 13, color: "var(--color-accent-800)" }}>
+              {error}
+            </p>
+          )}
+          {notice && (
+            <p style={{ margin: 0, fontSize: 13, color: "var(--color-accent-2-700)" }}>
+              {notice}
+            </p>
+          )}
 
           <button
             type="submit"
             disabled={busy}
-            className="mt-1 px-4 py-2 bg-[#22c55e] hover:bg-[#16a34a] disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm text-black font-semibold transition-all cursor-pointer"
+            className="btn btn-primary btn-block"
           >
             {busy
               ? "Working…"
@@ -139,20 +172,28 @@ export default function Login() {
         </form>
 
         {mode === "signin" && (
-          <p className="text-xs text-[#888] mt-3 text-center">
+          <div style={{ textAlign: "center", marginTop: 14, fontSize: 13 }}>
             <button
               type="button"
               onClick={resetPassword}
               disabled={busy}
-              className="text-[#22c55e] hover:underline disabled:opacity-50 cursor-pointer"
+              className="nav-link"
+              style={{ color: "var(--color-accent-700)" }}
             >
               Forgot password?
             </button>
-          </p>
+          </div>
         )}
 
-        <p className="text-sm text-[#888] mt-4 text-center">
-          {mode === "signin" ? "No account?" : "Already have an account?"}{" "}
+        <div
+          style={{
+            textAlign: "center",
+            marginTop: 12,
+            fontSize: 14,
+            color: "var(--color-neutral-700)",
+          }}
+        >
+          {mode === "signin" ? "No account? " : "Already have an account? "}
           <button
             type="button"
             onClick={() => {
@@ -160,11 +201,12 @@ export default function Login() {
               setError(null);
               setNotice(null);
             }}
-            className="text-[#22c55e] hover:underline cursor-pointer"
+            className="nav-link"
+            style={{ color: "var(--color-accent-700)", fontWeight: 600 }}
           >
             {mode === "signin" ? "Sign up" : "Sign in"}
           </button>
-        </p>
+        </div>
       </div>
     </div>
   );

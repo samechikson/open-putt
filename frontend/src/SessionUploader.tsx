@@ -46,7 +46,7 @@ export default function SessionUploader({
   };
 
   return (
-    <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5">
+    <div className="card elev-sm">
       {videoUrl && (
         <video
           ref={videoRef}
@@ -54,22 +54,38 @@ export default function SessionUploader({
           muted
           playsInline
           onLoadedData={handleLoaded}
-          className="w-full max-h-64 rounded-lg bg-black mb-4"
+          className="w-full max-h-64 mb-4"
+          style={{
+            borderRadius: "var(--radius-md)",
+            background: "#000",
+            display: "block",
+          }}
         />
       )}
 
       {phase !== "error" ? (
-        <div className="flex items-center gap-2 text-sm text-[#aaa]">
-          <span className="w-3.5 h-3.5 border-2 border-[#22c55e] border-t-transparent rounded-full animate-spin" />
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: 14,
+            color: "var(--color-neutral-700)",
+          }}
+        >
+          <span className="spinner" />
           {phase === "preparing" ? "Preparing upload…" : "Uploading…"}
         </div>
       ) : (
-        <div className="flex flex-col gap-3">
-          <p className="text-sm text-[#f87171]">{error}</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <p style={{ margin: 0, fontSize: 14, color: "var(--color-accent-800)" }}>
+            {error}
+          </p>
           <button
             type="button"
             onClick={onCancel}
-            className="self-start px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
+            className="btn btn-secondary"
+            style={{ alignSelf: "flex-start" }}
           >
             Try again
           </button>

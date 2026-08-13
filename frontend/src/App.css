@@ -1,9 +1,9 @@
 :root {
-  --plyr-color-main: #22c55e;
+  --plyr-color-main: var(--color-accent);
 }
 
 .plyr {
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 
 .cal-canvas {
@@ -12,14 +12,23 @@
   width: 100%;
   height: 100%;
   pointer-events: none;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   z-index: 4;
 }
 
 .detect-status { font-size: 0.8rem; margin: 8px 0 0; }
 .detect-status.idle { display: none; }
-.detect-status.detecting { color: #888; }
-.detect-status.found { color: #22c55e; }
-.detect-status.not-found { color: #f87171; }
+.detect-status.detecting { color: var(--color-neutral-600); }
+.detect-status.found { color: var(--color-accent-2-700); }
+.detect-status.not-found { color: var(--color-accent-800); }
 
-.offset-value { font-size: clamp(1.75rem, 7vw, 2.5rem); font-weight: 900; letter-spacing: 0.02em; margin: 12px 0 2px; color: #e5e5e5; }
+/* The headline offset/speed number: display face on the warm ground. */
+.offset-value {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: clamp(1.75rem, 7vw, 2.125rem);
+  line-height: 1.1;
+  letter-spacing: -0.015em;
+  margin: 0;
+  color: var(--color-text);
+}

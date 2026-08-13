@@ -1,12 +1,12 @@
-import { useMemo } from "react";
+import { useMemo, type CSSProperties } from "react";
 import type { SessionRow } from "./sessions";
 
 interface ContributionGraphProps {
   sessions: SessionRow[];
-  className?: string;
+  style?: CSSProperties;
 }
 
-const BOX = 11; // px, side of a day cell
+const BOX = 12; // px, side of a day cell
 const GAP = 3; // px, between cells
 const LABEL_W = 28; // px, left day-of-week label column
 
@@ -25,14 +25,14 @@ function dateKey(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-// Green intensity by session count for the day (grey when none), echoing the
-// GitHub contribution palette.
+// Accent intensity by session count for the day (a neutral tile when none),
+// climbing the Organic accent ramp like a GitHub contribution graph.
 function cellColor(count: number): string {
-  if (count <= 0) return "#2a2a2a";
-  if (count === 1) return "#0e4429";
-  if (count === 2) return "#006d32";
-  if (count === 3) return "#26a641";
-  return "#39d353";
+  if (count <= 0) return "var(--color-neutral-200)";
+  if (count === 1) return "var(--color-accent-200)";
+  if (count === 2) return "var(--color-accent-400)";
+  if (count === 3) return "var(--color-accent-600)";
+  return "var(--color-accent-800)";
 }
 
 interface Day {
@@ -43,7 +43,7 @@ interface Day {
 
 export default function ContributionGraph({
   sessions,
-  className = "",
+  style,
 }: ContributionGraphProps) {
   const { weeks, total } = useMemo(() => {
     // How many sessions fall on each local day.
@@ -88,8 +88,8 @@ export default function ContributionGraph({
   };
 
   return (
-    <div className={`bg-[#1a1a1a] border border-[#333] rounded-xl p-5 ${className}`}>
-      <h3 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-3">
+    <div className="card elev-sm" style={style}>
+      <h3 className="kicker" style={{ marginBottom: 16 }}>
         {total} session{total === 1 ? "" : "s"} in the last 3 months
       </h3>
 
@@ -103,7 +103,7 @@ export default function ContributionGraph({
             {weeks.map((_, i) => (
               <div
                 key={i}
-                className="text-[10px] text-[#888] whitespace-nowrap leading-none"
+                className="text-[10px] text-[color:var(--color-neutral-600)] whitespace-nowrap leading-none"
                 style={{ width: BOX }}
               >
                 {monthLabel(i)}
@@ -120,7 +120,7 @@ export default function ContributionGraph({
               {DAY_LABELS.map((label, r) => (
                 <div
                   key={r}
-                  className="text-[10px] text-[#888] leading-none flex items-center"
+                  className="text-[10px] text-[color:var(--color-neutral-600)] leading-none flex items-center"
                   style={{ height: BOX }}
                 >
                   {label}

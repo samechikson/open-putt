@@ -34,21 +34,26 @@ function formatDate(iso: string): string {
   });
 }
 
-const STATUS_STYLE: Record<SessionStatus, string> = {
-  queued: "bg-[#3a3320] text-[#f0b429]",
-  processing: "bg-[#3a3320] text-[#f0b429]",
-  done: "bg-[#1e3320] text-[#22c55e]",
-  error: "bg-[#3a2020] text-[#f87171]",
-};
-
 function StatusBadge({ status }: { status: SessionStatus }) {
   const label =
     status === "processing"
       ? "Processing"
       : status.charAt(0).toUpperCase() + status.slice(1);
+  // Queued/Processing read as in-progress (soft accent); an error reads as a
+  // hairline outline in the deep accent.
+  const cls = status === "error" ? "tag tag-outline" : "tag tag-accent";
   return (
     <span
-      className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${STATUS_STYLE[status]}`}
+      className={cls}
+      style={
+        status === "error"
+          ? {
+              fontSize: 10,
+              color: "var(--color-accent-800)",
+              borderColor: "var(--color-accent-800)",
+            }
+          : { fontSize: 10 }
+      }
     >
       {label}
     </span>
@@ -165,21 +170,32 @@ export default function Dashboard({
   const totalPutts = offsets?.length ?? 0;
   const hasDoneSessions = windowSessionIds.length > 0;
 
+  const selectStyle = { width: "auto", padding: "8px 14px" } as const;
+
   return (
     <>
       {sessions && sessions.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 mb-6">
-          <span className="text-xs font-semibold uppercase tracking-widest text-[#888] mr-1">
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            marginBottom: 24,
+            flexWrap: "wrap",
+          }}
+        >
+          <span className="kicker" style={{ marginRight: 2 }}>
             Filter
           </span>
           <select
+            className="input"
+            style={selectStyle}
             value={lengthFilter === "all" ? "all" : String(lengthFilter)}
             onChange={(e) =>
               setLengthFilter(
                 e.target.value === "all" ? "all" : Number(e.target.value),
               )
             }
-            className="bg-[#222] border border-[#333] hover:border-[#444] rounded-lg text-sm text-white px-3 py-1.5 cursor-pointer focus:outline-none focus:border-[#22c55e]"
           >
             <option value="all">All lengths</option>
             {lengthBuckets.map((b) => (
@@ -189,11 +205,12 @@ export default function Dashboard({
             ))}
           </select>
           <select
+            className="input"
+            style={selectStyle}
             value={breakFilter}
             onChange={(e) =>
               setBreakFilter(e.target.value as BreakDirection | "all")
             }
-            className="bg-[#222] border border-[#333] hover:border-[#444] rounded-lg text-sm text-white px-3 py-1.5 cursor-pointer focus:outline-none focus:border-[#22c55e]"
           >
             <option value="all">All breaks</option>
             {BREAK_DIRECTIONS.map((d) => (
@@ -209,7 +226,8 @@ export default function Dashboard({
                 setLengthFilter("all");
                 setBreakFilter("all");
               }}
-              className="px-3 py-1.5 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-sm text-[#aaa] font-medium transition-all cursor-pointer"
+              className="btn btn-ghost"
+              style={{ padding: "8px 16px", fontSize: 13 }}
             >
               Clear
             </button>
@@ -218,26 +236,43 @@ export default function Dashboard({
       )}
 
       {sessions && sessions.length > 0 && (
-        <div className="flex flex-col lg:flex-row gap-6 mb-6">
+        <div
+          style={{
+            display: "flex",
+            gap: 24,
+            marginBottom: 28,
+            flexWrap: "wrap",
+            alignItems: "stretch",
+          }}
+        >
           <ContributionGraph
             sessions={filteredSessions ?? sessions}
-            className="lg:w-1/3 lg:shrink-0 min-w-0"
+            style={{ flex: "1 1 440px", minWidth: 0 }}
           />
 
           {hasDoneSessions && (
-            <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5 lg:flex-1 min-w-0">
-              <div className="flex items-center justify-between gap-4 mb-3">
-                <h3 className="text-xs font-semibold uppercase tracking-widest text-[#aaa]">
-                  Recent Form
-                </h3>
+            <div
+              className="card elev-sm"
+              style={{ flex: "1 1 360px", minWidth: 0 }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: 16,
+                }}
+              >
+                <span className="kicker">Recent Form</span>
                 <select
+                  className="input"
+                  style={{ width: "auto", fontSize: 13, padding: "6px 12px" }}
                   value={sessionWindow === "all" ? "all" : String(sessionWindow)}
                   onChange={(e) =>
                     setSessionWindow(
                       e.target.value === "all" ? "all" : Number(e.target.value),
                     )
                   }
-                  className="bg-[#222] border border-[#333] hover:border-[#444] rounded-lg text-sm text-white px-3 py-1.5 cursor-pointer focus:outline-none focus:border-[#22c55e]"
                 >
                   {WINDOW_OPTIONS.map((opt) => (
                     <option key={opt} value={opt === "all" ? "all" : opt}>
@@ -246,28 +281,34 @@ export default function Dashboard({
                   ))}
                 </select>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 20,
+                }}
+              >
                 <div>
-                  <div className="offset-value">
+                  <div className="stat">
                     {offsets == null
                       ? "…"
                       : bias == null
                         ? "—"
                         : `${Math.abs(bias).toFixed(1)} mm`}
                   </div>
-                  <p className="text-sm text-[#aaa] -mt-1">
+                  <div className="stat-sub">
                     {bias == null
                       ? "directional bias"
                       : biasSide === "center"
                         ? "no directional bias"
                         : `${biasWord(biasSide)} bias`}
-                  </p>
+                  </div>
                 </div>
                 <div>
-                  <div className="offset-value">
+                  <div className="stat">
                     {offsets == null ? "…" : totalPutts}
                   </div>
-                  <p className="text-sm text-[#aaa] -mt-1">total putts</p>
+                  <div className="stat-sub">total putts</div>
                 </div>
               </div>
             </div>
@@ -275,39 +316,57 @@ export default function Dashboard({
         </div>
       )}
 
-      <div className="flex items-center justify-between gap-4 mb-6">
-        <h2 className="text-xl font-bold text-white">Your Sessions</h2>
-        <button
-          type="button"
-          onClick={onNewSession}
-          className="px-4 py-2 bg-[#22c55e] hover:bg-[#16a34a] rounded-lg text-sm text-black font-semibold transition-all cursor-pointer"
-        >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 16,
+          marginBottom: 18,
+        }}
+      >
+        <div style={{ fontFamily: "var(--font-heading)", fontSize: 24 }}>
+          Your Sessions
+        </div>
+        <button type="button" onClick={onNewSession} className="btn btn-primary">
           + New Session
         </button>
       </div>
 
       {sessions === undefined && (
-        <div className="flex items-center gap-2 text-sm text-[#888]">
-          <span className="w-3.5 h-3.5 border-2 border-[#22c55e] border-t-transparent rounded-full animate-spin" />
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: 14,
+            color: "var(--color-neutral-600)",
+          }}
+        >
+          <span className="spinner" />
           Loading sessions…
         </div>
       )}
 
       {sessions === null && (
-        <div className="bg-[#1a1a1a] border border-[#3a2020] rounded-xl p-5 text-sm text-[#f87171]">
+        <div
+          className="card elev-sm"
+          style={{ fontSize: 14, color: "var(--color-accent-800)" }}
+        >
           {error ?? "Failed to load sessions."}
         </div>
       )}
 
       {sessions && sessions.length === 0 && (
-        <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-8 text-center">
-          <p className="text-[#aaa] mb-4">
+        <div className="card elev-sm" style={{ padding: 32, textAlign: "center" }}>
+          <p style={{ margin: "0 0 16px", color: "var(--color-neutral-700)" }}>
             No sessions yet. Upload a putting video to get started.
           </p>
           <button
             type="button"
             onClick={onNewSession}
-            className="px-4 py-2 bg-[#22c55e] hover:bg-[#16a34a] rounded-lg text-sm text-black font-semibold transition-all cursor-pointer"
+            className="btn btn-primary"
+            style={{ alignSelf: "center" }}
           >
             + New Session
           </button>
@@ -318,58 +377,96 @@ export default function Dashboard({
         sessions.length > 0 &&
         filteredSessions &&
         filteredSessions.length === 0 && (
-          <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-8 text-center">
-            <p className="text-[#aaa]">
+          <div
+            className="card elev-sm"
+            style={{ padding: 32, textAlign: "center" }}
+          >
+            <p style={{ margin: 0, color: "var(--color-neutral-700)" }}>
               No sessions match the selected putt type.
             </p>
           </div>
         )}
 
-      {sessions && sessions.length > 0 && filteredSessions && filteredSessions.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {filteredSessions.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => onOpenSession(s.id)}
-              className="text-left bg-[#1a1a1a] border border-[#333] hover:bg-[#222] hover:border-[#444] rounded-xl p-4 transition-all cursor-pointer flex items-center justify-between gap-4"
-            >
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-white font-medium truncate">
-                    {s.file_name ?? "Session"}
-                  </span>
-                  {s.status !== "done" && <StatusBadge status={s.status} />}
+      {sessions &&
+        sessions.length > 0 &&
+        filteredSessions &&
+        filteredSessions.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            {filteredSessions.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => onOpenSession(s.id)}
+                className="card elev-sm"
+                style={{
+                  textAlign: "left",
+                  cursor: "pointer",
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 14,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div
+                    style={{ display: "flex", alignItems: "center", gap: 8 }}
+                  >
+                    <span
+                      style={{
+                        fontWeight: 600,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {s.file_name ?? "Session"}
+                    </span>
+                    {s.status !== "done" && <StatusBadge status={s.status} />}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: "var(--color-neutral-600)",
+                      marginTop: 2,
+                    }}
+                  >
+                    {formatDate(s.captured_at ?? s.created_at)}
+                    {s.length_feet != null && ` · ${s.length_feet} ft`}
+                    {s.break_type && ` · ${breakTypeLabel(s.break_type)}`}
+                    {s.putter_id &&
+                      putterNames.has(s.putter_id) &&
+                      ` · ${putterNames.get(s.putter_id)}`}
+                  </div>
                 </div>
-                <div className="text-xs text-[#888] mt-0.5">
-                  {formatDate(s.captured_at ?? s.created_at)}
-                  {s.length_feet != null && ` · ${s.length_feet} ft`}
-                  {s.break_type && ` · ${breakTypeLabel(s.break_type)}`}
-                  {s.putter_id &&
-                    putterNames.has(s.putter_id) &&
-                    ` · ${putterNames.get(s.putter_id)}`}
-                </div>
-              </div>
-              <div className="text-right shrink-0">
-                {s.status === "done" ? (
-                  <>
-                    <div className="text-white font-semibold">
-                      {s.putt_count} putt{s.putt_count === 1 ? "" : "s"}
-                    </div>
-                    {s.duration_s != null && (
-                      <div className="text-xs text-[#888]">
-                        {s.duration_s.toFixed(1)}s
+                <div style={{ textAlign: "right", flexShrink: 0 }}>
+                  {s.status === "done" ? (
+                    <>
+                      <div style={{ fontWeight: 600 }}>
+                        {s.putt_count} putt{s.putt_count === 1 ? "" : "s"}
                       </div>
-                    )}
-                  </>
-                ) : (
-                  <span className="text-[#666] text-lg">›</span>
-                )}
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
+                      {s.duration_s != null && (
+                        <div
+                          style={{
+                            fontSize: 12,
+                            color: "var(--color-neutral-600)",
+                          }}
+                        >
+                          {s.duration_s.toFixed(1)}s
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <span
+                      style={{ color: "var(--color-neutral-500)", fontSize: 18 }}
+                    >
+                      ›
+                    </span>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
     </>
   );
 }

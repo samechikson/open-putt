@@ -1,9 +1,17 @@
-import { Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import {
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+  useParams,
+} from "react-router-dom";
 import "./App.css";
 import Dashboard from "./Dashboard";
 import AnalyzeView from "./AnalyzeView";
 import SessionDetail from "./SessionDetail";
 import Putters from "./PuttersPage";
+import Logo from "./Logo";
 import { useAuth } from "./AuthContext";
 
 // Each screen has its own route (see the paths below). Navigation goes through
@@ -21,41 +29,85 @@ function SessionDetailRoute() {
 function App() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Which primary nav link reads as current. Putters is its own section;
+  // everything else lives under the Sessions umbrella.
+  const onPutters = location.pathname.startsWith("/putters");
 
   return (
-    <div className="min-h-screen bg-[#0d0d0d] text-[#d0d0d0] px-4 py-8">
-      <div className="max-w-6xl mx-auto">
-        <div className="flex items-center justify-between gap-4 mb-8">
-          <button
-            type="button"
-            onClick={() => navigate("/")}
-            className="text-left cursor-pointer"
-          >
-            <h1 className="text-2xl font-bold text-white">Putting Gate</h1>
-          </button>
-          {user && (
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-[#888] hidden sm:inline">
+    <div style={{ minHeight: "100svh", background: "var(--color-bg)" }}>
+      <nav className="nav" style={{ maxWidth: 1280, margin: "0 auto" }}>
+        <button
+          type="button"
+          className="nav-brand"
+          onClick={() => navigate("/")}
+        >
+          <Logo size={24} />
+          Putting Gate
+        </button>
+        {user && (
+          <>
+            <button
+              type="button"
+              className="nav-link"
+              aria-current={onPutters ? undefined : "page"}
+              onClick={() => navigate("/")}
+            >
+              Sessions
+            </button>
+            <button
+              type="button"
+              className="nav-link"
+              aria-current={onPutters ? "page" : undefined}
+              onClick={() => navigate("/putters")}
+            >
+              Putters
+            </button>
+            <div
+              style={{
+                marginLeft: "auto",
+                display: "flex",
+                alignItems: "center",
+                gap: 14,
+              }}
+            >
+              <span
+                className="hidden sm:inline"
+                style={{ fontSize: 13, color: "var(--color-neutral-600)" }}
+              >
                 {user.email}
               </span>
               <button
                 type="button"
-                onClick={() => navigate("/putters")}
-                className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
-              >
-                Putters
-              </button>
-              <button
-                type="button"
                 onClick={signOut}
-                className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
+                className="btn btn-ghost btn-icon"
+                aria-label="Sign out"
               >
-                Sign out
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.75"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                  <path d="M16 17l5-5-5-5" />
+                  <path d="M21 12H9" />
+                </svg>
               </button>
             </div>
-          )}
-        </div>
+          </>
+        )}
+      </nav>
 
+      <div
+        style={{ maxWidth: 1280, margin: "0 auto" }}
+        className="px-4 sm:px-8 pt-2 pb-24"
+      >
         <Routes>
           <Route
             path="/"

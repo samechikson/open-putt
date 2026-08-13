@@ -172,9 +172,10 @@ export default function Putters({ onBack }: PuttersProps) {
     key: keyof Omit<Draft, "id">,
     opts: { type?: string; placeholder?: string } = {},
   ) => (
-    <label className="flex flex-col gap-1">
-      <span className="text-sm text-[#aaa]">{label}</span>
+    <div className="field">
+      <label>{label}</label>
       <input
+        className="input"
         type={opts.type ?? "text"}
         {...(opts.type === "number" ? { min: 0, inputMode: "decimal" } : {})}
         value={draft?.[key] ?? ""}
@@ -182,95 +183,125 @@ export default function Putters({ onBack }: PuttersProps) {
           setDraft((d) => (d ? { ...d, [key]: e.target.value } : d))
         }
         placeholder={opts.placeholder ?? "—"}
-        className="bg-[#222] border border-[#333] focus:border-[#22c55e] rounded-lg text-sm text-white px-3 py-2 focus:outline-none"
       />
-    </label>
+    </div>
   );
+
+  const smallGhost = { padding: "6px 14px", fontSize: 13 } as const;
 
   return (
     <>
-      <div className="flex items-center justify-between gap-4 mb-6">
-        <h2 className="text-xl font-bold text-white">Your Putters</h2>
-        <div className="flex items-center gap-2 shrink-0">
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 16,
+          marginBottom: 24,
+        }}
+      >
+        <div style={{ fontFamily: "var(--font-heading)", fontSize: 24 }}>
+          Your Putters
+        </div>
+        <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>
           {draft == null && (
-            <button
-              type="button"
-              onClick={startAdd}
-              className="px-4 py-2 bg-[#22c55e] hover:bg-[#16a34a] rounded-lg text-sm text-black font-semibold transition-all cursor-pointer"
-            >
+            <button type="button" onClick={startAdd} className="btn btn-primary">
               + Add Putter
             </button>
           )}
-          <button
-            type="button"
-            onClick={onBack}
-            className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
-          >
+          <button type="button" onClick={onBack} className="btn btn-secondary">
             ← Sessions
           </button>
         </div>
       </div>
 
       {draft && (
-        <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5 mb-6">
-          <h3 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-3">
+        <div className="card elev-sm" style={{ marginBottom: 24 }}>
+          <div className="kicker" style={{ marginBottom: 16 }}>
             {draft.id == null ? "Add Putter" : "Edit Putter"}
-          </h3>
-          <div className="flex flex-col gap-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {field("Name", "name", { placeholder: "e.g. Gamer" })}
-              {field("Grip", "grip", { placeholder: "e.g. SuperStroke" })}
-              {field("Brand", "brand", { placeholder: "e.g. Scotty Cameron" })}
-              {field("Model", "model", { placeholder: "e.g. Newport 2" })}
-              {field("Length (inches)", "length_in", { type: "number" })}
-              {field("Lie (degrees)", "lie_deg", { type: "number" })}
-            </div>
-            {saveError && <p className="text-sm text-[#f87171]">{saveError}</p>}
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={saving}
-                className="px-4 py-2 bg-[#22c55e] hover:bg-[#16a34a] disabled:opacity-50 rounded-lg text-sm text-black font-semibold transition-all cursor-pointer"
-              >
-                {saving ? "Saving…" : "Save"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setDraft(null)}
-                disabled={saving}
-                className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] disabled:opacity-50 rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
-              >
-                Cancel
-              </button>
-            </div>
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: 16,
+              marginBottom: 16,
+            }}
+          >
+            {field("Name", "name", { placeholder: "e.g. Gamer" })}
+            {field("Grip", "grip", { placeholder: "e.g. SuperStroke" })}
+            {field("Brand", "brand", { placeholder: "e.g. Scotty Cameron" })}
+            {field("Model", "model", { placeholder: "e.g. Newport 2" })}
+            {field("Length (inches)", "length_in", { type: "number" })}
+            {field("Lie (degrees)", "lie_deg", { type: "number" })}
+          </div>
+          {saveError && (
+            <p
+              style={{
+                margin: "0 0 12px",
+                fontSize: 14,
+                color: "var(--color-accent-800)",
+              }}
+            >
+              {saveError}
+            </p>
+          )}
+          <div style={{ display: "flex", gap: 10 }}>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving}
+              className="btn btn-primary"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setDraft(null)}
+              disabled={saving}
+              className="btn btn-ghost"
+            >
+              Cancel
+            </button>
           </div>
         </div>
       )}
 
       {putters === undefined && (
-        <div className="flex items-center gap-2 text-sm text-[#888]">
-          <span className="w-3.5 h-3.5 border-2 border-[#22c55e] border-t-transparent rounded-full animate-spin" />
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: 14,
+            color: "var(--color-neutral-600)",
+          }}
+        >
+          <span className="spinner" />
           Loading putters…
         </div>
       )}
 
       {putters === null && (
-        <div className="bg-[#1a1a1a] border border-[#3a2020] rounded-xl p-5 text-sm text-[#f87171]">
+        <div
+          className="card elev-sm"
+          style={{ fontSize: 14, color: "var(--color-accent-800)" }}
+        >
           {loadError ?? "Failed to load putters."}
         </div>
       )}
 
       {putters && putters.length === 0 && draft == null && (
-        <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-8 text-center">
-          <p className="text-[#aaa] mb-4">
+        <div className="card elev-sm" style={{ padding: 32, textAlign: "center" }}>
+          <p style={{ margin: "0 0 16px", color: "var(--color-neutral-700)" }}>
             No putters yet. Add the putter you're using so you can tag your
             sessions with it.
           </p>
           <button
             type="button"
             onClick={startAdd}
-            className="px-4 py-2 bg-[#22c55e] hover:bg-[#16a34a] rounded-lg text-sm text-black font-semibold transition-all cursor-pointer"
+            className="btn btn-primary"
+            style={{ alignSelf: "center" }}
           >
             + Add Putter
           </button>
@@ -278,41 +309,55 @@ export default function Putters({ onBack }: PuttersProps) {
       )}
 
       {putters && putters.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+            gap: 14,
+          }}
+        >
           {putters.map((p) => {
             const spec = putterSpec(p);
             const busy = busyId === p.id;
             return (
-              <div
-                key={p.id}
-                className="bg-[#1a1a1a] border border-[#333] rounded-xl p-4 flex flex-col gap-3"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-white font-medium truncate">
-                        {p.name}
-                      </span>
-                      {p.is_active && (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-[#1e3320] text-[#22c55e]">
-                          Active
-                        </span>
-                      )}
-                    </div>
-                    {spec && (
-                      <div className="text-xs text-[#888] mt-0.5 truncate">
-                        {spec}
-                      </div>
-                    )}
-                  </div>
+              <div key={p.id} className="card elev-sm">
+                <div
+                  style={{ display: "flex", alignItems: "center", gap: 8 }}
+                >
+                  <span
+                    style={{
+                      fontWeight: 600,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {p.name}
+                  </span>
+                  {p.is_active && (
+                    <span className="tag tag-accent-2" style={{ fontSize: 10 }}>
+                      Active
+                    </span>
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: "var(--color-neutral-600)",
+                    marginBottom: 16,
+                    minHeight: 18,
+                  }}
+                >
+                  {spec ?? " "}
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
                   {!p.is_active && (
                     <button
                       type="button"
                       onClick={() => handleSetActive(p)}
                       disabled={busy}
-                      className="px-3 py-1.5 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] disabled:opacity-50 rounded-lg text-xs text-white font-medium transition-all cursor-pointer"
+                      className="btn btn-ghost"
+                      style={smallGhost}
                     >
                       Set active
                     </button>
@@ -321,7 +366,8 @@ export default function Putters({ onBack }: PuttersProps) {
                     type="button"
                     onClick={() => startEdit(p)}
                     disabled={busy}
-                    className="px-3 py-1.5 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] disabled:opacity-50 rounded-lg text-xs text-white font-medium transition-all cursor-pointer"
+                    className="btn btn-ghost"
+                    style={smallGhost}
                   >
                     Edit
                   </button>
@@ -329,7 +375,12 @@ export default function Putters({ onBack }: PuttersProps) {
                     type="button"
                     onClick={() => handleDelete(p)}
                     disabled={busy}
-                    className="px-3 py-1.5 bg-[#2a1a1a] border border-[#4a2a2a] hover:bg-[#3a2020] disabled:opacity-50 rounded-lg text-xs text-[#f87171] font-medium transition-all cursor-pointer ml-auto"
+                    className="btn btn-ghost"
+                    style={{
+                      ...smallGhost,
+                      marginLeft: "auto",
+                      color: "var(--color-accent-800)",
+                    }}
                   >
                     {busy ? "…" : "Delete"}
                   </button>

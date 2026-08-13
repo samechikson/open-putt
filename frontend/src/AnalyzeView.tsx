@@ -1,11 +1,7 @@
 import { useState, useCallback } from "react";
 import VideoCard from "./VideoCard";
 import SessionUploader from "./SessionUploader";
-import {
-  biasWord,
-  golferSide,
-  type AnalysisResult,
-} from "./analysis";
+import { biasWord, golferSide, type AnalysisResult } from "./analysis";
 import { mean, stdev } from "./stats";
 
 const MAX_VIDEOS = 5;
@@ -20,6 +16,74 @@ interface AnalyzeViewProps {
   // Called once a Full Session upload is queued, with its new session id, so
   // the app can navigate to the session's page to watch it process.
   onSessionCreated: (sessionId: string) => void;
+}
+
+// The dashed drop-zone shared by the two upload paths. It's a label wrapping a
+// hidden file input, so clicking anywhere in the zone opens the picker.
+function DropZone({
+  prompt,
+  multiple,
+  onChange,
+}: {
+  prompt: string;
+  multiple?: boolean;
+  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+}) {
+  return (
+    <label
+      style={{
+        border: "2px dashed var(--color-neutral-400)",
+        borderRadius: "var(--radius-lg)",
+        padding: 28,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 10,
+        textAlign: "center",
+        cursor: "pointer",
+      }}
+    >
+      <svg
+        width="28"
+        height="28"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="var(--color-accent-600)"
+        strokeWidth="2.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M12 3v12" />
+        <path d="m7 8 5-5 5 5" />
+        <path d="M5 21h14" />
+      </svg>
+      <div style={{ fontSize: 13, color: "var(--color-neutral-700)" }}>
+        {prompt}
+      </div>
+      <span
+        className="btn btn-secondary"
+        style={{ padding: "8px 16px", fontSize: 13 }}
+      >
+        Browse files
+      </span>
+      <input
+        type="file"
+        accept="video/*"
+        multiple={multiple}
+        onChange={onChange}
+        style={{
+          position: "absolute",
+          width: 1,
+          height: 1,
+          padding: 0,
+          margin: -1,
+          overflow: "hidden",
+          clip: "rect(0 0 0 0)",
+          border: 0,
+        }}
+      />
+    </label>
+  );
 }
 
 // Upload flow. Individual Putts are analyzed in-browser and shown inline (short
@@ -40,6 +104,7 @@ export default function AnalyzeView({
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
     setOverflowNote(files.length > MAX_VIDEOS);
     const items: VideoItem[] = files.slice(0, MAX_VIDEOS).map((file, i) => ({
       id: `${Date.now()}-${i}-${file.name}`,
@@ -112,29 +177,38 @@ export default function AnalyzeView({
 
   return (
     <>
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 16,
+          marginBottom: 24,
+          flexWrap: "wrap",
+        }}
+      >
         <div>
-          <h2 className="text-xl font-bold text-white mb-1">New Session</h2>
-          <p className="text-sm text-[#888]">
+          <div
+            style={{
+              fontFamily: "var(--font-heading)",
+              fontSize: 24,
+              marginBottom: 4,
+            }}
+          >
+            New Session
+          </div>
+          <div style={{ fontSize: 14, color: "var(--color-neutral-700)" }}>
             Upload one clip per putt, or a single video of the whole session —
             analysis runs automatically
-          </p>
+          </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>
           {haveUploads && (
-            <button
-              type="button"
-              onClick={handleReset}
-              className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
-            >
+            <button type="button" onClick={handleReset} className="btn btn-ghost">
               Clear
             </button>
           )}
-          <button
-            type="button"
-            onClick={onBack}
-            className="px-4 py-2 bg-[#222] border border-[#333] hover:bg-[#2c2c2c] hover:border-[#444] rounded-lg text-sm text-white font-medium transition-all cursor-pointer"
-          >
+          <button type="button" onClick={onBack} className="btn btn-secondary">
             ← Sessions
           </button>
         </div>
@@ -142,39 +216,60 @@ export default function AnalyzeView({
 
       {/* Upload: one clip per putt (left) or one multi-putt video (right) */}
       {!haveUploads && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-          <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5">
-            <h2 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-1">
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+            gap: 20,
+            marginBottom: 28,
+          }}
+        >
+          <div className="card elev-sm">
+            <div className="kicker" style={{ marginBottom: 4 }}>
               Individual Putts
-            </h2>
-            <p className="text-xs text-[#888] mb-3">
+            </div>
+            <div
+              style={{
+                fontSize: 13,
+                color: "var(--color-neutral-600)",
+                marginBottom: 16,
+              }}
+            >
               One video per putt, up to {MAX_VIDEOS}
-            </p>
-            <input
-              type="file"
-              accept="video/*"
+            </div>
+            <DropZone
+              prompt="Drag clips here, or"
               multiple
               onChange={handleFileChange}
-              className="block w-full bg-[#111] border border-[#444] rounded-md text-sm text-[#fff] px-3 py-2 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:bg-[#333] file:text-white file:cursor-pointer"
             />
             {overflowNote && (
-              <p className="text-xs text-[#f0b429] mt-2">
+              <p
+                style={{
+                  fontSize: 12,
+                  color: "var(--color-accent-800)",
+                  marginTop: 8,
+                }}
+              >
                 Only the first {MAX_VIDEOS} videos are analyzed.
               </p>
             )}
           </div>
-          <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5">
-            <h2 className="text-xs font-semibold uppercase tracking-widest text-[#aaa] mb-1">
+          <div className="card elev-sm">
+            <div className="kicker" style={{ marginBottom: 4 }}>
               Full Session
-            </h2>
-            <p className="text-xs text-[#888] mb-3">
+            </div>
+            <div
+              style={{
+                fontSize: 13,
+                color: "var(--color-neutral-600)",
+                marginBottom: 16,
+              }}
+            >
               One video with several putts — analyzed in the background
-            </p>
-            <input
-              type="file"
-              accept="video/*"
+            </div>
+            <DropZone
+              prompt="Drag a video here, or"
               onChange={handleSessionFileChange}
-              className="block w-full bg-[#111] border border-[#444] rounded-md text-sm text-[#fff] px-3 py-2 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:bg-[#333] file:text-white file:cursor-pointer"
             />
           </div>
         </div>
@@ -192,56 +287,97 @@ export default function AnalyzeView({
       {/* Individual Putts: summary + per-video cards (synchronous). */}
       {videos.length > 0 && (
         <>
-          <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-5 mb-6">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-xs font-semibold uppercase tracking-widest text-[#aaa]">
-                Session Averages
-              </h2>
-              <span className="text-xs text-[#888] flex items-center gap-2">
-                {anyProcessing && (
-                  <span className="w-3.5 h-3.5 border-2 border-[#22c55e] border-t-transparent rounded-full animate-spin" />
-                )}
+          <div className="card elev-sm" style={{ marginBottom: 24 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: 16,
+              }}
+            >
+              <span className="kicker">Session Averages</span>
+              <span
+                style={{
+                  fontSize: 12,
+                  color: "var(--color-neutral-600)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                {anyProcessing && <span className="spinner" />}
                 {anyProcessing ? "Analyzing… " : ""}
                 {`${analyzedCount} of ${videos.length} analyzed`}
               </span>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 1fr)",
+                gap: 20,
+              }}
+            >
               <div>
-                <div className="offset-value">{fmt(avgAbsOffset)} mm</div>
-                <p className="text-sm text-[#aaa] -mt-1">avg offset (accuracy)</p>
+                <div className="stat" style={{ fontSize: 28 }}>
+                  {fmt(avgAbsOffset)} mm
+                </div>
+                <div className="stat-sub">avg offset (accuracy)</div>
               </div>
               <div>
-                <div className="offset-value">
+                <div className="stat" style={{ fontSize: 28 }}>
                   {bias == null ? "—" : `${Math.abs(bias).toFixed(1)} mm`}
                 </div>
-                <p className="text-sm text-[#aaa] -mt-1">
+                <div className="stat-sub">
                   {bias == null
                     ? "directional bias"
                     : biasSide === "center"
                       ? "no directional bias"
                       : `${biasLabel} bias`}
-                </p>
+                </div>
               </div>
               <div>
-                <div className="offset-value">
-                  {speedDispersion == null ? "—" : `± ${speedDispersion.toFixed(2)}`} m/s
+                <div className="stat" style={{ fontSize: 28 }}>
+                  {speedDispersion == null
+                    ? "—"
+                    : `± ${speedDispersion.toFixed(2)}`}{" "}
+                  m/s
                 </div>
-                <p className="text-sm text-[#aaa] -mt-1">
-                  speed dispersion (consistency)
-                </p>
+                <div className="stat-sub">speed dispersion (consistency)</div>
               </div>
             </div>
-            <div className="flex gap-6 mt-4 pt-4 border-t border-[#333] text-sm">
-              <span className="text-[#aaa]">
-                Pushes <span className="text-white font-semibold">{pushes}</span>
+            <div
+              style={{
+                display: "flex",
+                gap: 24,
+                marginTop: 16,
+                paddingTop: 16,
+                borderTop: "1px solid var(--color-divider)",
+                fontSize: 14,
+              }}
+            >
+              <span style={{ color: "var(--color-neutral-700)" }}>
+                Pushes{" "}
+                <span style={{ fontWeight: 700, color: "var(--color-text)" }}>
+                  {pushes}
+                </span>
               </span>
-              <span className="text-[#aaa]">
-                Pulls <span className="text-white font-semibold">{pulls}</span>
+              <span style={{ color: "var(--color-neutral-700)" }}>
+                Pulls{" "}
+                <span style={{ fontWeight: 700, color: "var(--color-text)" }}>
+                  {pulls}
+                </span>
               </span>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+              gap: 20,
+            }}
+          >
             {videos.map((v, i) => (
               <VideoCard
                 key={v.id}

@@ -1,6 +1,66 @@
+@import url('https://fonts.googleapis.com/css2?family=Caprasimo:wght@400&family=Figtree:wght@400;600;700&display=swap');
 @import "tailwindcss";
 
+/* ══════════════════════════════════════════════════════════════════════════
+   Organic — design-system tokens and component classes, applied to the live
+   Putting Gate web app. Tokens and classes are ported from the shared Organic
+   design system (Caprasimo display + Figtree body on a warm sand ground with a
+   burnt-orange accent). Layout is still done with Tailwind utilities; colour,
+   type and the component chrome come from the classes below.
+   ══════════════════════════════════════════════════════════════════════ */
+
 :root {
+  --color-bg: #f5ead8;
+  --color-surface: #ebddc5;
+  --color-text: #201e1d;
+  --color-accent: #c67139;
+  --color-accent-2: #7a8a5e;
+  --color-divider: color-mix(in srgb, #201e1d 16%, transparent);
+
+  /* Tonal ramps — one shared lightness scale so the same step of any role
+     matches the others in visual value. */
+  --color-neutral-100: #f9f4ed;
+  --color-neutral-200: #eee7db;
+  --color-neutral-300: #dcd3c4;
+  --color-neutral-400: #c0b6a5;
+  --color-neutral-500: #a19786;
+  --color-neutral-600: #82796a;
+  --color-neutral-700: #645c50;
+  --color-neutral-800: #474238;
+  --color-neutral-900: #2e2b25;
+
+  --color-accent-100: #fff2eb;
+  --color-accent-200: #ffe1d0;
+  --color-accent-300: #ffc6a5;
+  --color-accent-400: #f6a06b;
+  --color-accent-500: #d67f48;
+  --color-accent-600: #b2622d;
+  --color-accent-700: #8c491a;
+  --color-accent-800: #643312;
+  --color-accent-900: #402310;
+
+  --color-accent-2-100: #f0fae1;
+  --color-accent-2-200: #e1eecc;
+  --color-accent-2-300: #ccdbb2;
+  --color-accent-2-400: #aebf92;
+  --color-accent-2-500: #8fa073;
+  --color-accent-2-600: #728157;
+  --color-accent-2-700: #56633f;
+  --color-accent-2-800: #3d472b;
+  --color-accent-2-900: #272e1b;
+
+  --font-heading: "Caprasimo", system-ui, sans-serif;
+  --font-heading-weight: 400;
+  --font-body: "Figtree", system-ui, sans-serif;
+
+  --radius-sm: 8px;
+  --radius-md: 16px;
+  --radius-lg: 28px;
+
+  --shadow-sm: 0 1px 2px color-mix(in srgb, #2e2b25 14%, transparent);
+  --shadow-md: 0 3px 10px color-mix(in srgb, #2e2b25 16%, transparent);
+  --shadow-lg: 0 12px 32px color-mix(in srgb, #2e2b25 22%, transparent);
+
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -8,9 +68,8 @@
 }
 
 html {
-  /* Stop iOS Safari from auto-inflating text on rotation/zoom — a common
-     cause of unexpected horizontal overflow on phones — and guard the
-     viewport against any stray horizontal scroll. */
+  /* Stop iOS Safari from auto-inflating text on rotation/zoom and guard the
+     viewport against stray horizontal scroll. */
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
   overflow-x: hidden;
@@ -18,9 +77,11 @@ html {
 
 body {
   margin: 0;
-  background: #0d0d0d;
-  color: #d0d0d0;
-  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.55;
   overflow-x: hidden;
   /* Long unbreakable strings (filenames, emails) wrap instead of forcing width. */
   overflow-wrap: break-word;
@@ -31,3 +92,133 @@ body {
   width: 100%;
   overflow-x: hidden;
 }
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  line-height: 1.12;
+  letter-spacing: -0.015em;
+}
+
+a { color: var(--color-accent); text-decoration: none; text-underline-offset: 3px; }
+a:hover { color: var(--color-accent-800); text-decoration: underline; }
+
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
+
+/* — buttons — */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  cursor: pointer; text-decoration: none;
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-size: 14px; line-height: 1.2; color: var(--color-text);
+  background: transparent; border: 1px solid transparent;
+  padding: 9px 16px; border-radius: 999px;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.btn svg { display: block; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-primary { background: var(--color-accent); color: var(--color-bg); }
+.btn-primary:hover:not(:disabled) { background: var(--color-accent-600); text-decoration: none; }
+.btn-primary:active:not(:disabled) { background: var(--color-accent-700); }
+.btn-secondary { border-color: var(--color-divider); }
+.btn-secondary:hover:not(:disabled) { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
+.btn-secondary:active:not(:disabled) { background: color-mix(in srgb, var(--color-text) 14%, transparent); }
+.btn-ghost { color: var(--color-accent); padding-inline: 8px; }
+.btn-ghost:hover:not(:disabled) { background: color-mix(in srgb, var(--color-accent) 10%, transparent); text-decoration: none; }
+.btn-ghost:active:not(:disabled) { background: color-mix(in srgb, var(--color-accent) 18%, transparent); }
+.btn-danger { color: var(--color-accent-800); border-color: var(--color-divider); }
+.btn-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--color-accent-800) 10%, transparent); }
+.btn-icon { width: 36px; height: 36px; padding: 0; }
+.btn-block { width: 100%; margin-top: 9px; }
+
+/* — forms — */
+.field > label, .field-label {
+  display: block; font-size: 12px; margin-bottom: 5px;
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+}
+.input {
+  width: 100%; min-height: 36px; padding: 6px 14px; font: inherit;
+  font-size: 14px; color: var(--color-text); caret-color: var(--color-accent);
+  background: var(--color-surface);
+  border: 1px solid var(--color-divider); border-radius: 999px;
+}
+.input:hover { border-color: color-mix(in srgb, var(--color-text) 45%, transparent); }
+.input:focus-visible { border-color: var(--color-accent); outline: none; outline-offset: 0; }
+select.input { cursor: pointer; }
+
+/* — cards — */
+.card {
+  display: flex; flex-direction: column; gap: 9px;
+  padding: 13px; border-radius: calc(var(--radius-lg) * 1.15);
+  background: var(--color-surface);
+}
+.elev-sm { box-shadow: var(--shadow-sm); }
+.elev-md { box-shadow: var(--shadow-md); }
+.elev-lg { box-shadow: var(--shadow-lg); }
+
+.kicker {
+  font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--color-neutral-600);
+}
+
+/* — tags — */
+.tag {
+  display: inline-flex; align-items: center; font-size: 11px;
+  letter-spacing: 0.02em; padding: 3px 10px; border-radius: 999px;
+}
+.tag-accent { background: var(--color-accent-100); color: var(--color-accent-800); }
+.tag-accent-2 { background: var(--color-accent-2-100); color: var(--color-accent-2-800); }
+.tag-neutral { background: var(--color-neutral-100); color: var(--color-neutral-800); }
+.tag-outline { border: 1px solid var(--color-accent); color: var(--color-accent); }
+
+/* — navigation — */
+.nav {
+  display: flex; align-items: center; gap: 18px;
+  padding: 13px 18px;
+}
+.nav-brand {
+  display: flex; align-items: center; gap: 10px;
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-size: 19px; color: var(--color-text); cursor: pointer;
+  background: none; border: 0; padding: 0;
+}
+.nav a, .nav-link {
+  color: var(--color-text); text-decoration: none; font-size: 14px;
+  background: none; border: 0; cursor: pointer; font-family: var(--font-body);
+  padding: 0;
+}
+.nav a:hover, .nav-link:hover,
+.nav a[aria-current='page'], .nav-link[aria-current='page'] {
+  color: var(--color-accent); text-decoration: none;
+}
+
+/* — tables — */
+.table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.table th {
+  text-align: left; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  padding: 9px 13px; border-bottom: 1px solid var(--color-divider);
+}
+.table td {
+  padding: 9px 13px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-text) 8%, transparent);
+}
+.table tbody tr:last-child td { border-bottom: 0; }
+.table tbody tr:hover { background: color-mix(in srgb, var(--color-text) 4%, transparent); }
+
+/* — big stat number — */
+.stat {
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-size: 34px; line-height: 1.1; color: var(--color-text);
+}
+.stat-sub { font-size: 13px; color: var(--color-neutral-600); margin-top: -2px; }
+
+/* — spinner — */
+.spinner {
+  display: inline-block; width: 14px; height: 14px;
+  border: 2px solid var(--color-accent); border-top-color: transparent;
+  border-radius: 50%; animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }

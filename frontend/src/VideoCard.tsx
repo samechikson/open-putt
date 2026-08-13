@@ -425,21 +425,39 @@ function VideoCard({ id, file, index, onResult, onBusyChange }: VideoCardProps) 
   };
 
   return (
-    <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-4 flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-white truncate" title={file.name}>
+    <div className="card elev-sm">
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+        }}
+      >
+        <h3 style={{ fontSize: 15, fontWeight: 600, margin: 0 }} title={file.name}>
           Putt {index + 1}
         </h3>
-        <span className="text-[11px] text-[#666] truncate max-w-[50%]" title={file.name}>
+        <span
+          style={{
+            fontSize: 11,
+            color: "var(--color-neutral-600)",
+            maxWidth: "50%",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+          title={file.name}
+        >
           {file.name}
         </span>
       </div>
 
-      <div className="relative w-full">
+      <div style={{ position: "relative", width: "100%" }}>
         <video
           ref={videoRef}
           src={videoUrl ?? undefined}
-          className="w-full block rounded-md bg-black"
+          className="w-full"
+          style={{ display: "block", borderRadius: "var(--radius-md)", background: "#000" }}
           playsInline
           controls
           onLoadedMetadata={handleVideoMetadata}
@@ -447,9 +465,25 @@ function VideoCard({ id, file, index, onResult, onBusyChange }: VideoCardProps) 
         />
         <canvas ref={canvasRef} className="cal-canvas" />
         {busy && (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/50 rounded-md">
-            <span className="w-8 h-8 border-[3px] border-[#22c55e] border-t-transparent rounded-full animate-spin" />
-            <span className="text-xs text-[#ddd]">
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 10,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              background: "color-mix(in srgb, #000 45%, transparent)",
+              borderRadius: "var(--radius-md)",
+            }}
+          >
+            <span
+              className="spinner"
+              style={{ width: 32, height: 32, borderWidth: 3 }}
+            />
+            <span style={{ fontSize: 12, color: "#fff" }}>
               {loading ? "Analyzing…" : "Detecting ball…"}
             </span>
           </div>
@@ -465,14 +499,14 @@ function VideoCard({ id, file, index, onResult, onBusyChange }: VideoCardProps) 
 
       {/* Individual result */}
       {result && (
-        <div className="border-t border-[#333] pt-3">
+        <div style={{ borderTop: "1px solid var(--color-divider)", paddingTop: 12 }}>
           {result.offset_mm !== null ? (
-            <div className="flex items-end gap-6">
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 24 }}>
               <div>
-                <div className="offset-value !text-[1.75rem] !my-0">
+                <div className="offset-value" style={{ fontSize: "1.75rem" }}>
                   {Math.abs(result.offset_mm)} mm
                 </div>
-                <p className="text-xs text-[#aaa]">
+                <p style={{ margin: 0, fontSize: 12, color: "var(--color-neutral-700)" }}>
                   {golferSide(result.offset_mm) === "center"
                     ? "on center"
                     : golferSide(result.offset_mm)}
@@ -480,34 +514,63 @@ function VideoCard({ id, file, index, onResult, onBusyChange }: VideoCardProps) 
               </div>
               {result.speed_mps != null && (
                 <div>
-                  <div className="offset-value !text-[1.75rem] !my-0">
+                  <div className="offset-value" style={{ fontSize: "1.75rem" }}>
                     {result.speed_mps} m/s
                   </div>
-                  <p className="text-xs text-[#aaa]">at gate</p>
+                  <p style={{ margin: 0, fontSize: 12, color: "var(--color-neutral-700)" }}>
+                    at gate
+                  </p>
                 </div>
               )}
             </div>
           ) : (
-            <p className="text-sm text-[#888]">No offset measured</p>
+            <p style={{ margin: 0, fontSize: 14, color: "var(--color-neutral-600)" }}>
+              No offset measured
+            </p>
           )}
           {result.message && (
-            <p className="text-[11px] text-[#777] mt-1">{result.message}</p>
+            <p style={{ fontSize: 11, color: "var(--color-neutral-600)", marginTop: 4 }}>
+              {result.message}
+            </p>
           )}
         </div>
       )}
 
       {error && (
-        <div className="bg-[#3a0a0a] border border-[#7f1d1d] text-[#fca5a5] rounded-lg px-3 py-2 text-xs">
+        <div
+          style={{
+            border: "1px solid var(--color-accent-800)",
+            color: "var(--color-accent-800)",
+            background: "var(--color-accent-100)",
+            borderRadius: "var(--radius-md)",
+            padding: "8px 12px",
+            fontSize: 12,
+          }}
+        >
           {error}
         </div>
       )}
 
       {/* Calibration (collapsible) */}
-      <details className="text-sm text-[#ccc]">
-        <summary className="cursor-pointer text-xs text-[#888] select-none">
+      <details style={{ fontSize: 14 }}>
+        <summary
+          style={{
+            cursor: "pointer",
+            fontSize: 12,
+            color: "var(--color-neutral-600)",
+            userSelect: "none",
+          }}
+        >
           Calibration
         </summary>
-        <div className="grid grid-cols-2 gap-2 mt-2">
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 8,
+            marginTop: 8,
+          }}
+        >
           {(
             [
               ["gateCenterX", "Center X (px)"],
@@ -516,22 +579,23 @@ function VideoCard({ id, file, index, onResult, onBusyChange }: VideoCardProps) 
               ["gateWidthMm", "Gate width (mm)"],
             ] as [keyof CalibrationValues, string][]
           ).map(([key, label]) => (
-            <label key={key} className="flex flex-col gap-1 text-xs text-[#ccc]">
-              {label}
+            <div key={key} className="field">
+              <label>{label}</label>
               <input
+                className="input"
                 type="number"
                 value={cal[key]}
                 onChange={(e) => updateCal(key, e.target.value)}
-                className="bg-[#111] border border-[#444] rounded-md text-white px-2 py-1.5 text-sm w-full box-border"
               />
-            </label>
+            </div>
           ))}
         </div>
         <button
           type="button"
           onClick={() => runAnalysis()}
           disabled={loading}
-          className="mt-2 px-3 py-1.5 bg-[#222] border border-[#444] rounded-md text-sm text-white cursor-pointer hover:bg-[#2c2c2c] disabled:opacity-50"
+          className="btn btn-secondary"
+          style={{ marginTop: 12, padding: "6px 14px", fontSize: 13 }}
         >
           {loading ? "Analyzing…" : "Re-analyze"}
         </button>
