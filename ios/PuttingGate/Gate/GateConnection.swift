@@ -28,6 +28,10 @@ final class GateConnection: NSObject, ObservableObject {
     private static let serviceUUID = CBUUID(string: "6b1a0001-8c2f-4d3a-9e5b-1f2c3d4e5f60")
     private static let puttCharUUID = CBUUID(string: "6b1a0002-8c2f-4d3a-9e5b-1f2c3d4e5f60")
 
+    /// Cap on the in-memory live putt feed. Newest are kept; older ones fall off
+    /// the on-screen list (they remain persisted server-side).
+    private static let maxLivePutts = 100
+
     enum State: Equatable {
         case poweredOff      // Bluetooth is off
         case unauthorized    // user denied Bluetooth permission
@@ -112,15 +116,17 @@ final class GateConnection: NSObject, ObservableObject {
 
     /// Start (or restart) scanning for a gate. Safe to call repeatedly.
     ///
-    /// Scans without a service filter and matches in `didDiscover` (by advertised
-    /// UUID or name) instead of `scanForPeripherals(withServices:)`. ESP32s often
-    /// can't fit a 128-bit UUID *and* the name in the 31-byte advertisement, so a
-    /// UUID-filtered scan can miss the gate; matching by name too is robust.
+    /// Filters on the gate's service UUID. The firmware puts that UUID in the
+    /// primary advertisement (and the name in the scan response) precisely so a
+    /// UUID-filtered scan finds it — see `putt_tracker.ino`'s `startBLE`. Filtering
+    /// is important: an unfiltered (`nil`) scan surfaces and retains an object for
+    /// every advertising BLE device nearby, continuously, which steadily grows the
+    /// app's memory while the Gate tab is left open (the screen is kept awake).
     func startScan() {
         guard central.state == .poweredOn else { return }
         discovered.removeAll()
         state = .scanning
-        central.scanForPeripherals(withServices: nil)
+        central.scanForPeripherals(withServices: [Self.serviceUUID])
     }
 
     func connect(_ found: DiscoveredGate) {
@@ -294,6 +300,9 @@ extension GateConnection: CBCentralManagerDelegate, CBPeripheralDelegate {
             rawJSON: data, raw: putt, corrected: corrected, sessionId: sessionId
         )
         putts.insert(ReceivedPutt(putt: corrected), at: 0)   // newest first
+        // Bound the live feed so a marathon session can't grow it without limit
+        // (every putt is persisted server-side; History shows the full record).
+        if putts.count > Self.maxLivePutts { putts.removeLast(putts.count - Self.maxLivePutts) }
         relayPutt(corrected, body: body, sessionId: sessionId, tagSession: isNewSession)
     }
 }
