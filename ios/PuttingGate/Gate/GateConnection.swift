@@ -98,9 +98,14 @@ final class GateConnection: NSObject, ObservableObject {
     /// carrying the new selection, so a run at a new length/break is recorded
     /// separately from what came before. No empty session is created if no further
     /// putt is rolled.
+    ///
+    /// The screen clears immediately so the previous session's putts aren't shown
+    /// against the new selection — the live view drops back to its "ready" state
+    /// until the first putt of the new session rolls.
     func startNewSession() {
         guard activeSessionId != nil else { return }
         startNewSessionRequested = true
+        putts.removeAll()
     }
 
     // MARK: Intent
