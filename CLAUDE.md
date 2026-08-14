@@ -4,50 +4,72 @@ Guidance for AI assistants working in this repository.
 
 ## What this is
 
-**Putting Gate** is a golf putting-analysis app. A player films a putt rolling
-through a physical "laser gate" (laser dot defining where the ball crosses);
-the app measures how far off-center the ball crossed and reports a push/pull bias and 
-speed. It has two clients over one shared backend:
+**Putting Gate** is a golf putting-analysis app. A player rolls a putt through a
+physical "laser gate" (a laser dot defining where the ball crosses); the app
+measures how far off-center the ball crossed and reports a push/pull bias (in mm)
+and speed.
+
+There are **two ways to measure a putt**, both feeding one shared backend and DB:
+
+1. **Hardware gate (primary path today).** A 3D-printed bridge gate with a laser
+   and three ToF distance sensors, driven by an ESP32, measures the offset
+   on-device and sends each putt over **Bluetooth (BLE)** to the iOS app, which
+   relays it to the backend. No video, no CV analysis pass.
+2. **Video / computer vision.** A player films a putt and uploads the clip (from
+   the web app); the backend runs an **OpenCV** pipeline that auto-calibrates the
+   gate from the footage and measures each putt's crossing offset/direction/speed.
+
+Both paths produce the same `sessions` → `putts` data and share history/stats.
+
+The components:
 
 - **`backend/`** — Python / FastAPI service. Does the computer-vision analysis
-  (OpenCV) and is the **sole database client** and the **sole storage/auth broker**.
+  (OpenCV), ingests hardware-gate putts, and is the **sole database client** and
+  the **sole storage/auth broker**.
 - **`frontend/`** — React 19 + TypeScript + Vite + Tailwind v4 web app. Upload a
   clip, view sessions/putts, manage putters. Served by Firebase Hosting.
-- **`ios/`** — SwiftUI app (`PuttingGate`). Records putts on-device and uploads
-  them for analysis.
+- **`ios/`** — SwiftUI app (`PuttingGate`). A **BLE central** that pairs with the
+  hardware gate, relays each putt to the backend, and shows history/settings.
+- **`microcontroller/`** — ESP32 (Arduino C++) firmware for the physical laser
+  gate + ToF sensors. See its own `README.md` for wiring, geometry, and BLE.
 
 Plus `supabase/migrations/` (DB migration history), `backend/db/schema.sql`
-(consolidated greenfield schema), and `docs/` (operator runbooks).
+(consolidated greenfield schema), and `docs/` (operator runbooks). A top-level
+`README.md` gives the human-facing overview.
 
 ## Architecture at a glance
 
 ```
-iOS app ─┐                              ┌─ Cloud Storage (GCS)   [video bytes]
-         ├─→ Firebase Hosting /api/** ──┤
-Web app ─┘   (rewrite, same-origin)     ├─ Cloud Run: FastAPI ──→ Postgres (Supabase)
-                                        │      │
-                                        │      └─→ Cloud Tasks ──→ POST /api/process (analysis worker)
-                                        └─ Firebase Auth (ID-token verification)
+Hardware gate (ESP32) ─BLE→ iOS app ─┐                        ┌─ Cloud Storage (GCS)  [video]
+                                     ├─→ Firebase Hosting  ────┤
+Web app (upload clip) ───────────────┘   /api/** rewrite,     ├─ Cloud Run: FastAPI ──→ Postgres (Supabase)
+                                         same-origin           │      │
+                                     ┌─ Firebase Auth          │      └─→ Cloud Tasks ──→ POST /api/process (worker)
+                                     └─ (ID-token verify)      └───────
 ```
 
 Key facts that shape everything:
 
 - **The backend is the only thing that touches the database.** The browser and
-  iOS clients never talk to Postgres directly. Every read/write goes through a
-  FastAPI endpoint that verifies a Firebase ID token and scopes the query by
-  `user_id` (the Firebase UID) — `WHERE user_id = $uid`. There is no Row-Level
-  Security; ownership is enforced in application SQL.
+  iOS clients never talk to Postgres directly (and the gate reaches it only via
+  the iOS relay). Every read/write goes through a FastAPI endpoint that verifies a
+  Firebase ID token and scopes the query by `user_id` (the Firebase UID) —
+  `WHERE user_id = $uid`. There is no Row-Level Security; ownership is enforced in
+  application SQL.
 - **The API is mounted under `/api`.** `backend/app/main.py` defines routes on an
   inner app and mounts it at `/api` on the served `application`. Firebase Hosting
   rewrites `/api/**` to the Cloud Run service, so the web app makes **same-origin**
   calls (no CORS in prod). Every caller uses the `/api` prefix: web
   (`VITE_API_BASE=/api`), iOS (`AppSettings.backendBaseURL` ends in `/api`), and
   the Cloud Tasks callback (`PROCESS_URL=.../api/process`).
-- **Analysis is async and CPU-bound.** Clients upload the video straight to
+- **Video analysis is async and CPU-bound.** Clients upload the video straight to
   storage (signed URL), then call `/analyze-session`, which creates a `queued`
   session row and hands the work to Cloud Tasks. A separate `/process` request
   (which owns a full CPU allocation) runs the OpenCV pipeline and drives the row
   to `done`/`error`. Clients **poll** `GET /api/sessions/{id}` for status.
+- **Hardware-gate putts skip all of that.** They arrive already-measured over BLE
+  and are persisted directly via `POST /api/device/putts` (`main.py`) — no video,
+  no Cloud Tasks, no analysis pass, no polling. They carry per-sensor offsets.
 - **Video lifecycle:** clips upload to the transient `uploads/` prefix (deleted
   after 1 day). On any terminal outcome — success *or* domain error — the clip is
   copied to the retained `sessions/` prefix (kept 90 days) so no captured putt is
@@ -66,7 +88,7 @@ in the code, it almost always means "the Postgres database," not auth/PostgREST.
 
 | File | Responsibility |
 |------|----------------|
-| `main.py` | FastAPI app, all HTTP endpoints, the async analysis orchestration (`_process_session`, local vs. Cloud Tasks worker paths). Mounts the API under `/api`. |
+| `main.py` | FastAPI app, all HTTP endpoints, the async analysis orchestration (`_process_session`, local vs. Cloud Tasks worker paths), and the `POST /device/putts` BLE-gate ingest. Mounts the API under `/api`. |
 | `analyzer.py` | The OpenCV pipeline: auto-calibrate the gate + scale from the video, segment by motion, measure each putt's crossing offset/direction/speed. Public entrypoints: `analyze_putt`, `analyze_session`, `detect_ball_in_frame`, `check_calibration_frame`. Raises `CalibrationError`. |
 | `segmenter.py` | Motion analysis helpers: `motion_levels`, `segment_motion`, `quiet_frames` (used to find still frames for calibration and to split a multi-putt clip). |
 | `db.py` | The **only** Postgres client. `psycopg` connection pool (lazy, fail-soft). All ownership-scoped queries. Column lists (`_SESSION_COLS`, etc.) are kept in sync with the frontend TS types. |
@@ -89,8 +111,8 @@ in the code, it almost always means "the Postgres database," not auth/PostgREST.
   against `TASKS_INTERNAL_TOKEN` in the `X-Tasks-Token` header. It returns 200 for
   terminal outcomes (so Cloud Tasks stops) and 500 for infra errors (so it
   retries, up to `TASKS_MAX_RETRIES`).
-- **Idempotent by session id.** The session `id` is the iOS recording UUID.
-  Re-uploads/re-analysis upsert the row and replace the putts wholesale.
+- **Idempotent by session id.** The session `id` is the iOS recording/session
+  UUID. Re-uploads/re-analysis upsert the row and replace the putts wholesale.
 
 ## Frontend (`frontend/src/`)
 
@@ -118,16 +140,24 @@ No router — `App.tsx` does lightweight view switching (`dashboard` / `analyze`
 
 SwiftUI + SwiftData, Firebase (`FirebaseCore` / `FirebaseAuth`). Entry point
 `PuttingGateApp.swift` configures Firebase, builds the object graph, and gates the
-UI behind auth (`RootView`). Tabs: Record / History / Settings.
+UI behind auth. Tabs: **Gate / History / Settings** (`MainTabView`).
 
+The app is a **BLE central** that pairs with the hardware gate and relays each
+putt to the backend — it no longer records or uploads video itself.
+
+- `Gate/` — `GateConnection` (BLE central; scans for and subscribes to the
+  `PuttingGate` peripheral), `GatePutt` / `GatePuttRelay` (decode a putt
+  notification and `POST /api/device/putts`), `GateCalibration` +
+  `CalibrationStore` (center-calibration state). BLE service/characteristic UUIDs
+  must match the firmware (`microcontroller/putt_tracker`).
+- `Session/` — `SessionConfig` / `SessionConfigStore` (putter, distance, break for
+  the current session; a length/break change starts a new session),
+  `SessionHistory`, `SessionMetadataService`.
+- `Views/` — `GateView`, `HistoryView`, `SettingsView`, `CalibrationView`,
+  `LoginView`.
 - `Config/AppSettings.swift` — `backendBaseURL` is **hardcoded** to the prod Cloud
-  Run URL (ends in `/api`); capture resolution + exposure bias settings.
-- `Capture/` — `CameraRecorder`, `CameraPreview`, `CaptureTest` (pre-flight that
-  posts a frame to `/calibration-check`).
-- `Upload/UploadService.swift` — signed-URL upload flow, sends the Firebase ID
-  token, resumes pending uploads on launch.
-- `Auth/`, `Views/`, `Model/`, `Coordinator/` — auth, screens, SwiftData models,
-  recording coordinator.
+  Run URL (ends in `/api`).
+- `Auth/`, `Theme/` (the "Organic" design system), `Resources/`.
 
 `GoogleService-Info.plist` is bundled in the target. Firebase SDK is added via
 Swift Package Manager (see the migration runbook, step 6).
@@ -137,17 +167,21 @@ Swift Package Manager (see the migration runbook, step 6).
 Two sources of truth, kept consistent:
 
 - `supabase/migrations/000X_*.sql` — the **applied migration history** against the
-  live Supabase Postgres (through `0004_firebase_auth.sql`, which widened
-  `user_id` from `uuid` to `text`, dropped RLS/PostgREST-era pieces, and dropped
-  the `auth.users` FKs).
+  live Supabase Postgres. Notable steps: `0004_firebase_auth.sql` widened
+  `user_id` from `uuid` to `text` and dropped RLS/PostgREST-era pieces and the
+  `auth.users` FKs; `0005` added `putts.crossing_frame`; `0006` added
+  `putts.sensor_offsets_mm` for hardware-gate putts (0007/0008 added then dropped
+  a per-putt video column).
 - `backend/db/schema.sql` — the equivalent **consolidated greenfield schema**,
   handy for spinning up a local Postgres for tests. Idempotent.
 
 Tables: `putters` (user-owned clubs, ≤1 active per user via a partial unique
-index), `sessions` (one row per analyzed video; `id` = iOS recording UUID; a
-flattened calibration block; `status` lifecycle enum), `putts` (one row per
-detected putt, `ON DELETE CASCADE` from sessions). Enums: `putt_break`,
-`putt_direction`, `scale_source`, `session_status`.
+index), `sessions` (one row per analyzed video / gate session; `id` = the iOS
+session UUID; a flattened calibration block; `status` lifecycle enum), `putts`
+(one row per detected putt, `ON DELETE CASCADE` from sessions). Video putts carry
+a `crossing_frame` (the frame the ball crossed the gate); hardware putts carry
+`sensor_offsets_mm` (per-sensor readings, NULL for video putts). Enums:
+`putt_break`, `putt_direction`, `scale_source`, `session_status`.
 
 **If you change a returned column set, update it in all three places:** the SQL,
 `db.py`'s `_*_COLS`, and the frontend TS types (`sessions.ts` / `putters.ts` /
@@ -203,7 +237,24 @@ session go `queued → processing → done`).
 ### iOS
 
 Open `ios/PuttingGate.xcodeproj` in Xcode, build & run. Requires the Firebase SPM
-package and `GoogleService-Info.plist` in the target.
+package and `GoogleService-Info.plist` in the target. BLE won't work in the
+Simulator — to exercise the gate you need a real device and the physical ESP32
+peripheral advertising nearby.
+
+### Microcontroller
+
+ESP32 firmware built with `arduino-cli`. Flash from a sketch folder — the
+`huge_app` partition scheme is **required** (BLE overflows the default):
+
+```bash
+arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=huge_app --upload -p /dev/cu.usbserial-0001 .
+arduino-cli monitor -p /dev/cu.usbserial-0001 -c baudrate=115200
+```
+
+`microcontroller/putt_tracker/putt_tracker.ino` is the main program; `sensors/`,
+`laser/`, `blink/` are bring-up sketches. See `microcontroller/README.md` for the
+full wiring, measurement geometry/math, detection algorithm, BLE payload, and
+gotchas.
 
 ## Deployment
 
