@@ -25,7 +25,7 @@ struct PuttingGateApp: App {
         let settings = AppSettings()
         let auth = AuthManager()
         let service = SessionMetadataService(settings: settings, auth: auth)
-        let config = SessionConfigStore(service: service)
+        let config = SessionConfigStore(service: service, auth: auth)
         let history = SessionHistoryStore(service: service)
         let calibration = CalibrationStore()
         let gate = GateConnection(

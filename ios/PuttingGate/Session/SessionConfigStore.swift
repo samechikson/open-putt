@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// The session-setup selection a player makes before rolling putts — which
@@ -14,9 +15,36 @@ final class SessionConfigStore: ObservableObject {
     @Published private(set) var loadError: String?
 
     private let service: SessionMetadataService
+    private var cancellables: Set<AnyCancellable> = []
 
-    init(service: SessionMetadataService) {
+    init(service: SessionMetadataService, auth: AuthManager) {
         self.service = service
+
+        // Reload putters whenever auth becomes ready. The Gate/History views
+        // load putters from `.task`, but that first fetch can go out before a
+        // valid Firebase ID token is available on a cold start — the request
+        // then 401s, the putter list stays empty, and the picker is stuck on
+        // "None". Observing auth state re-fetches once the user is signed in
+        // (and every subsequent sign-in), so the selection self-heals.
+        auth.$state
+            .sink { [weak self] state in
+                Task { @MainActor in self?.handleAuthState(state) }
+            }
+            .store(in: &cancellables)
+    }
+
+    /// React to an auth transition: load putters once signed in, and drop any
+    /// prior user's putters/selection on sign-out.
+    private func handleAuthState(_ state: AuthManager.State) {
+        switch state {
+        case .signedIn:
+            Task { await loadPutters() }
+        case .signedOut:
+            putters = []
+            selectedPutterId = nil
+        case .loading:
+            break
+        }
     }
 
     /// The current selection as session metadata.
