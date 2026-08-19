@@ -7,6 +7,7 @@ struct PuttingGateApp: App {
 
     @StateObject private var settings: AppSettings
     @StateObject private var auth: AuthManager
+    @StateObject private var service: SessionMetadataService
     @StateObject private var config: SessionConfigStore
     @StateObject private var history: SessionHistoryStore
     @StateObject private var calibration: CalibrationStore
@@ -34,6 +35,7 @@ struct PuttingGateApp: App {
 
         _settings = StateObject(wrappedValue: settings)
         _auth = StateObject(wrappedValue: auth)
+        _service = StateObject(wrappedValue: service)
         _config = StateObject(wrappedValue: config)
         _history = StateObject(wrappedValue: history)
         _calibration = StateObject(wrappedValue: calibration)
@@ -45,6 +47,7 @@ struct PuttingGateApp: App {
             RootView()
                 .environmentObject(settings)
                 .environmentObject(auth)
+                .environmentObject(service)
                 .environmentObject(config)
                 .environmentObject(history)
                 .environmentObject(calibration)

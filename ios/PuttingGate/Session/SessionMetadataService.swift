@@ -3,7 +3,7 @@ import Foundation
 /// Backend calls for session setup: list the user's putters, and tag a session
 /// with its metadata (putter / length / break). Mirrors `GatePuttRelay` — a
 /// Bearer token from `AuthManager`, URLs from `AppSettings`.
-final class SessionMetadataService {
+final class SessionMetadataService: ObservableObject {
     private let settings: AppSettings
     private let auth: AuthManager
 
@@ -43,6 +43,41 @@ final class SessionMetadataService {
         let (data, response) = try await URLSession.shared.data(for: req)
         try Self.check(response, data)
         return try JSONDecoder().decode([SessionRow].self, from: data)
+    }
+
+    /// The putts of one owned session (ordered by putt index), from
+    /// `GET /api/sessions/{id}/putts`. Powers the session-detail list.
+    func fetchPutts(sessionId: String) async throws -> [SessionPutt] {
+        guard let url = settings.sessionPuttsURL(id: sessionId) else {
+            throw ServiceError(message: "No backend URL configured")
+        }
+        var req = URLRequest(url: url)
+        if let token = await auth.validAccessToken() {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, response) = try await URLSession.shared.data(for: req)
+        try Self.check(response, data)
+        return try JSONDecoder().decode([SessionPutt].self, from: data)
+    }
+
+    /// Delete one putt from an owned session via
+    /// `DELETE /api/sessions/{id}/putts/{index}`. A 404 (the putt is already
+    /// gone) counts as success, so the delete is idempotent.
+    func deletePutt(sessionId: String, puttIndex: Int) async throws {
+        guard let url = settings.puttURL(sessionId: sessionId, puttIndex: puttIndex) else {
+            throw ServiceError(message: "No backend URL configured")
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "DELETE"
+        if let token = await auth.validAccessToken() {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) || http.statusCode == 404
+        else {
+            throw ServiceError(message: Self.serverMessage(from: data) ?? "Delete failed")
+        }
     }
 
     /// The `offset_mm` of every putt across the given sessions, from

@@ -3,7 +3,7 @@ import Foundation
 /// One analyzed session, from `GET /api/sessions`. Only the fields the History
 /// tab renders are decoded; the backend scopes every row to the signed-in user.
 /// Mirrors the frontend `SessionRow` (sessions.ts) and `db.py`'s `_SESSION_COLS`.
-struct SessionRow: Codable, Identifiable {
+struct SessionRow: Codable, Identifiable, Hashable {
     let id: String
     let createdAt: String
     let capturedAt: String?

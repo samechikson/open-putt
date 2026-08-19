@@ -10,23 +10,29 @@ struct HistoryView: View {
     private static let days = weeks * 7
 
     var body: some View {
-        VStack(spacing: 0) {
-            PGHeader("History")
-            ScrollView {
-                content
-                    .padding(.horizontal, 20)
-                    .padding(.top, 4)
-                    .padding(.bottom, 24)
+        NavigationStack {
+            VStack(spacing: 0) {
+                PGHeader("History")
+                ScrollView {
+                    content
+                        .padding(.horizontal, 20)
+                        .padding(.top, 4)
+                        .padding(.bottom, 24)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .pgScreenBackground()
+            .tint(.pgAccent)
+            .navigationBarHidden(true)
+            .navigationDestination(for: SessionRow.self) { session in
+                SessionDetailView(session: session)
+            }
+            .task {
+                if config.putters.isEmpty { await config.loadPutters() }
+                await history.load()
+            }
+            .refreshable { await history.load() }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .pgScreenBackground()
-        .tint(.pgAccent)
-        .task {
-            if config.putters.isEmpty { await config.loadPutters() }
-            await history.load()
-        }
-        .refreshable { await history.load() }
     }
 
     @ViewBuilder
@@ -153,22 +159,29 @@ struct HistoryView: View {
     }
 
     private func sessionRow(_ session: SessionRow) -> some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(dateLabel(session.timestamp))
+        NavigationLink(value: session) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(dateLabel(session.timestamp))
+                        .font(.pgBody(15, weight: .semibold))
+                        .foregroundStyle(Color.pgText)
+                    Text(subtitle(session))
+                        .font(.pgBody(12))
+                        .foregroundStyle(Color.pgNeutral700)
+                }
+                Spacer()
+                Text("\(session.puttCount) putt\(session.puttCount == 1 ? "" : "s")")
                     .font(.pgBody(15, weight: .semibold))
                     .foregroundStyle(Color.pgText)
-                Text(subtitle(session))
-                    .font(.pgBody(12))
-                    .foregroundStyle(Color.pgNeutral700)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.pgNeutral400)
             }
-            Spacer()
-            Text("\(session.puttCount) putt\(session.puttCount == 1 ? "" : "s")")
-                .font(.pgBody(15, weight: .semibold))
-                .foregroundStyle(Color.pgText)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .buttonStyle(.plain)
     }
 
     // MARK: Formatting

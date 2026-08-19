@@ -30,6 +30,13 @@ final class AppSettings: ObservableObject {
         return URL(string: Self.backendBaseURL + "/sessions/" + encoded)
     }
 
+    /// A session's putts (ordered), for the session-detail list.
+    func sessionPuttsURL(id: String) -> URL? {
+        guard let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
+        else { return nil }
+        return URL(string: Self.backendBaseURL + "/sessions/" + encoded + "/putts")
+    }
+
     /// One putt within a session, used to DELETE it (a mishit or false trip).
     func puttURL(sessionId: String, puttIndex: Int) -> URL? {
         guard let encoded = sessionId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
