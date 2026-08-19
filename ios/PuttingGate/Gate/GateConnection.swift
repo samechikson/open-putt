@@ -11,6 +11,11 @@ enum RelayStatus: Equatable {
 /// A putt received over BLE, plus its backend-relay status (for the live view).
 struct ReceivedPutt: Identifiable {
     let putt: GatePutt
+    /// The backend session id this putt was relayed under. Usually the firmware's
+    /// session id, but a mid-run length/break split relays under a freshly minted
+    /// id (see `GateConnection`), so it's captured per-putt so a delete targets
+    /// the right session.
+    let sessionId: String
     var relay: RelayStatus = .sending
     var id: String { putt.id }
 }
@@ -189,6 +194,25 @@ final class GateConnection: NSObject, ObservableObject {
             putts[idx].relay = status
         }
     }
+
+    // MARK: Delete
+
+    /// Remove one putt — a mishit or a false trip — from the live feed and the
+    /// backend. A putt whose relay failed never reached the backend, so it's just
+    /// dropped locally; otherwise the backend row is deleted first (a 404 there is
+    /// treated as already-gone) and the row is removed only once that succeeds.
+    /// Throws if the backend delete fails, leaving the row in place.
+    @MainActor
+    func deletePutt(_ received: ReceivedPutt) async throws {
+        if case .failed = received.relay {
+            putts.removeAll { $0.id == received.id }
+            return
+        }
+        try await relay.deletePutt(
+            sessionId: received.sessionId, puttIndex: received.putt.puttIndex
+        )
+        putts.removeAll { $0.id == received.id }
+    }
 }
 
 extension GateConnection: CBCentralManagerDelegate, CBPeripheralDelegate {
@@ -299,7 +323,7 @@ extension GateConnection: CBCentralManagerDelegate, CBPeripheralDelegate {
         let body = Self.outgoingBody(
             rawJSON: data, raw: putt, corrected: corrected, sessionId: sessionId
         )
-        putts.insert(ReceivedPutt(putt: corrected), at: 0)   // newest first
+        putts.insert(ReceivedPutt(putt: corrected, sessionId: sessionId), at: 0)   // newest first
         // Bound the live feed so a marathon session can't grow it without limit
         // (every putt is persisted server-side; History shows the full record).
         if putts.count > Self.maxLivePutts { putts.removeLast(putts.count - Self.maxLivePutts) }

@@ -29,4 +29,11 @@ final class AppSettings: ObservableObject {
         else { return nil }
         return URL(string: Self.backendBaseURL + "/sessions/" + encoded)
     }
+
+    /// One putt within a session, used to DELETE it (a mishit or false trip).
+    func puttURL(sessionId: String, puttIndex: Int) -> URL? {
+        guard let encoded = sessionId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
+        else { return nil }
+        return URL(string: Self.backendBaseURL + "/sessions/" + encoded + "/putts/\(puttIndex)")
+    }
 }

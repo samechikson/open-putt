@@ -10,6 +10,7 @@ struct GateView: View {
 
     @State private var ringSpin = false
     @State private var showingCalibration = false
+    @State private var deleteError: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -312,6 +313,14 @@ struct GateView: View {
             }
         }
         .pgCard()
+        .alert(
+            "Couldn't delete putt",
+            isPresented: Binding(get: { deleteError != nil }, set: { if !$0 { deleteError = nil } })
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(deleteError ?? "")
+        }
     }
 
     private func puttRow(_ received: ReceivedPutt) -> some View {
@@ -332,6 +341,18 @@ struct GateView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
+        .contentShape(Rectangle())
+        // Long-press to remove a mishit or a false trip from the session. The
+        // deletion is permanent (backend + local), so it's a deliberate,
+        // red-styled action rather than a stray swipe.
+        .contextMenu {
+            Button("Delete putt", systemImage: "trash", role: .destructive) {
+                Task {
+                    do { try await gate.deletePutt(received) }
+                    catch { deleteError = error.localizedDescription }
+                }
+            }
+        }
     }
 
     @ViewBuilder
