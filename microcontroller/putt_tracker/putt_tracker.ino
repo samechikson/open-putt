@@ -90,8 +90,26 @@ void muxSelect(uint8_t ch) {
   Wire.endTransmission();
 }
 
+// --- Reading-quality gate (rejects sun / IR-flooded samples) ---------------
+// The VL53L4CD ranges with a 940 nm IR laser, and sunlight is very bright at
+// 940 nm. When the gate's far wall is lit by the sun it reflects that IR back
+// into the sensors, which can still return range_status 0 but with a distance
+// biased *short* — reading the empty wall as ~120 mm instead of ~175 mm. That
+// trips the ball-present threshold and produces phantom putts (observed
+// outdoors as a consistent +48..+60 mm PUSH). These gates drop such samples so
+// they never look like a ball. Both fields are already in real units (the ULD
+// converts them): sigma_mm is the sensor's own std-dev estimate of the distance
+// in mm; a trustworthy target reads a few mm, sun blows it up. The signal:ambient
+// test requires the target return to stand clearly above the ambient IR floor —
+// it self-scales, so it stays lax indoors (near-zero ambient) and tightens in
+// sun. Tune from the serial log with GATE_QUALITY_DEBUG set to 1.
+#define GATE_QUALITY_DEBUG 0
+const float SIGMA_MAX_MM       = 15.0;   // reject a reading noisier than this
+const float MIN_SIGNAL_AMBIENT = 1.5;    // signal_rate must be >= this x ambient_rate
+
 // Distance in mm for sensor i (channel must already be selected).
-// Returns -1 if no fresh, valid reading.
+// Returns -1 if there's no fresh reading, the sensor flags it invalid, or it
+// fails the sun/IR quality gate above.
 float readSensorMM(int i) {
   uint8_t ready = 0;
   sensors[i]->VL53L4CD_CheckForDataReady(&ready);
@@ -100,6 +118,19 @@ float readSensorMM(int i) {
   VL53L4CD_Result_t res;
   sensors[i]->VL53L4CD_GetResult(&res);
   if (res.range_status != 0) return -1;       // 0 = valid target
+  // Quality gate: drop noisy / IR-flooded samples that pass range_status but
+  // aren't trustworthy (see the note above).
+  if (res.sigma_mm > SIGMA_MAX_MM ||
+      (float)res.signal_rate_kcps < MIN_SIGNAL_AMBIENT * (float)res.ambient_rate_kcps) {
+#if GATE_QUALITY_DEBUG
+    Serial.print("  ch"); Serial.print(CHANNELS[i]);
+    Serial.print(" reject: d=");    Serial.print(res.distance_mm);
+    Serial.print(" sigma=");        Serial.print(res.sigma_mm);
+    Serial.print(" signal=");       Serial.print(res.signal_rate_kcps);
+    Serial.print(" ambient=");      Serial.println(res.ambient_rate_kcps);
+#endif
+    return -1;
+  }
   return (float)res.distance_mm;
 }
 
