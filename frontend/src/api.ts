@@ -6,10 +6,17 @@ import { auth } from "./firebaseClient";
 // caller and scope data by user. The DB is no longer reachable from the browser
 // directly (as it was with Supabase + RLS); everything goes through here.
 
-async function authHeaders(): Promise<Record<string, string>> {
+async function authHeaders(
+  forceRefresh = false,
+): Promise<Record<string, string>> {
+  // Wait for Firebase to finish restoring any persisted session before reading
+  // the user. On a cold page load `auth.currentUser` is briefly null while auth
+  // initializes; without this the first request(s) could go out with no token
+  // and 401. `authStateReady` resolves immediately once initialization is done.
+  await auth.authStateReady();
   const user = auth.currentUser;
   if (!user) return {};
-  const token = await user.getIdToken();
+  const token = await user.getIdToken(forceRefresh);
   return { Authorization: `Bearer ${token}` };
 }
 
@@ -17,11 +24,21 @@ export async function apiFetch(
   path: string,
   init: RequestInit = {},
 ): Promise<Response> {
-  const headers: Record<string, string> = {
-    ...((init.headers as Record<string, string>) ?? {}),
-    ...(await authHeaders()),
-  };
-  return fetch(`${API_BASE}${path}`, { ...init, headers });
+  const baseHeaders = (init.headers as Record<string, string>) ?? {};
+  const send = async (auth: Record<string, string>) =>
+    fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers: { ...baseHeaders, ...auth },
+    });
+
+  const res = await send(await authHeaders());
+  // A 401 right after load usually means the token was missing or stale (auth
+  // had only just initialized). Force a fresh token and retry once. Every
+  // apiFetch body is a string or FormData, so it's safe to replay.
+  if (res.status === 401 && auth.currentUser) {
+    return send(await authHeaders(true));
+  }
+  return res;
 }
 
 // Pull a human message out of an error response body ({detail: ...}).
