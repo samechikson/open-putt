@@ -10,43 +10,50 @@ rules_version = '2';
 //     signed-in user may create their own sessions/putts.
 //   * The backend (the legacy ESP32 direct-post ingest path) uses the Admin SDK,
 //     which **bypasses these rules**.
+//
+// `get` (and `delete`) allow a *non-existent* doc (resource == null): iOS ingest
+// does a create-if-absent read on a session's first putt, and that read must
+// return "not found" rather than be denied. `list` stays strictly ownership-
+// scoped (a query must filter `user_id == uid`), since list results always exist.
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() {
       return request.auth != null;
     }
-    // The existing doc belongs to the caller.
-    function owns(res) {
-      return signedIn() && res.data.user_id == request.auth.uid;
+    // The existing doc is owned by the caller — or doesn't exist yet (a get on a
+    // missing doc, or an idempotent delete, reveals nothing).
+    function ownsOrAbsent() {
+      return resource == null || resource.data.user_id == request.auth.uid;
     }
     // The incoming doc is owned by the caller (create/update can't set or move
     // ownership to someone else).
     function ownsIncoming() {
-      return signedIn() && request.resource.data.user_id == request.auth.uid;
+      return request.resource.data.user_id == request.auth.uid;
+    }
+    // A list query must be constrained to the caller's own docs.
+    function ownsListed() {
+      return resource.data.user_id == request.auth.uid;
     }
 
-    // Putters: full CRUD by the owner (the web app manages these).
     match /putters/{putterId} {
-      allow read, delete: if owns(resource);
-      allow create: if ownsIncoming();
-      allow update: if owns(resource) && ownsIncoming();
+      allow get, delete: if signedIn() && ownsOrAbsent();
+      allow list: if signedIn() && ownsListed();
+      allow create: if signedIn() && ownsIncoming();
+      allow update: if signedIn() && ownsOrAbsent() && ownsIncoming();
     }
 
-    // Sessions: the iOS app creates one per gate run (on its first putt) and
-    // keeps its putt_count in sync; the web app edits metadata or deletes. A
-    // create/update can't set or move ownership to someone else.
     match /sessions/{sessionId} {
-      allow read, delete: if owns(resource);
-      allow create: if ownsIncoming();
-      allow update: if owns(resource) && ownsIncoming();
+      allow get, delete: if signedIn() && ownsOrAbsent();
+      allow list: if signedIn() && ownsListed();
+      allow create: if signedIn() && ownsIncoming();
+      allow update: if signedIn() && ownsOrAbsent() && ownsIncoming();
     }
 
-    // Putts: the iOS app writes them on ingest (idempotent per session+index);
-    // either client can read its own and delete a putt (a mishit / false trip).
     match /putts/{puttId} {
-      allow read, delete: if owns(resource);
-      allow create: if ownsIncoming();
-      allow update: if owns(resource) && ownsIncoming();
+      allow get, delete: if signedIn() && ownsOrAbsent();
+      allow list: if signedIn() && ownsListed();
+      allow create: if signedIn() && ownsIncoming();
+      allow update: if signedIn() && ownsOrAbsent() && ownsIncoming();
     }
   }
 }
