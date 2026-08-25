@@ -39,9 +39,9 @@ struct SettingsView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 10) {
-                        PGSectionHeader("Backend")
+                        PGSectionHeader("Data")
                         row {
-                            Text(AppSettings.backendBaseURL)
+                            Text("Firebase Firestore")
                                 .font(.system(size: 12, design: .monospaced))
                                 .foregroundStyle(Color.pgNeutral700)
                                 .lineLimit(1)

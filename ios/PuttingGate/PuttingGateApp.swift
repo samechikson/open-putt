@@ -5,7 +5,6 @@ import FirebaseCore
 @main
 struct PuttingGateApp: App {
 
-    @StateObject private var settings: AppSettings
     @StateObject private var auth: AuthManager
     @StateObject private var service: SessionMetadataService
     @StateObject private var config: SessionConfigStore
@@ -23,17 +22,15 @@ struct PuttingGateApp: App {
         PGFonts.register()
         PGAppearance.apply()
 
-        let settings = AppSettings()
         let auth = AuthManager()
-        let service = SessionMetadataService(settings: settings, auth: auth)
+        let service = SessionMetadataService()
         let config = SessionConfigStore(service: service, auth: auth)
         let history = SessionHistoryStore(service: service)
         let calibration = CalibrationStore()
         let gate = GateConnection(
-            settings: settings, auth: auth, config: config, calibration: calibration
+            config: config, calibration: calibration, service: service
         )
 
-        _settings = StateObject(wrappedValue: settings)
         _auth = StateObject(wrappedValue: auth)
         _service = StateObject(wrappedValue: service)
         _config = StateObject(wrappedValue: config)
@@ -45,7 +42,6 @@ struct PuttingGateApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environmentObject(settings)
                 .environmentObject(auth)
                 .environmentObject(service)
                 .environmentObject(config)

@@ -1,9 +1,10 @@
 import Foundation
+import FirebaseFirestore
 
-/// One putt within a session, from `GET /api/sessions/{id}/putts`. Mirrors the
-/// web `PuttRow` (sessions.ts) and `db.py`'s `_PUTT_FIELDS`; only the fields the
-/// iOS session-detail view renders are decoded.
-struct SessionPutt: Codable, Identifiable {
+/// One putt within a session, read from the `putts` Firestore collection. Mirrors
+/// the web `PuttRow` (sessions.ts) and `db.py`'s `_PUTT_FIELDS`; only the fields
+/// the iOS session-detail view renders are kept.
+struct SessionPutt: Identifiable {
     let puttIndex: Int
     let offsetMm: Double?
     let speedMps: Double?
@@ -14,12 +15,15 @@ struct SessionPutt: Codable, Identifiable {
     /// The putt_index is the stable per-session identity (a delete leaves a gap
     /// rather than renumbering), so it's a safe list id.
     var id: Int { puttIndex }
+}
 
-    enum CodingKeys: String, CodingKey {
-        case puttIndex = "putt_index"
-        case offsetMm = "offset_mm"
-        case speedMps = "speed_mps"
-        case sensorOffsetsMm = "sensor_offsets_mm"
+extension SessionPutt {
+    init(doc: DocumentSnapshot) {
+        puttIndex = (doc.get("putt_index") as? NSNumber)?.intValue ?? 0
+        offsetMm = (doc.get("offset_mm") as? NSNumber)?.doubleValue
+        speedMps = (doc.get("speed_mps") as? NSNumber)?.doubleValue
+        sensorOffsetsMm = (doc.get("sensor_offsets_mm") as? [Any])?
+            .map { ($0 as? NSNumber)?.doubleValue }
     }
 }
 

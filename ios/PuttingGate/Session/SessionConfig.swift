@@ -1,15 +1,20 @@
 import Foundation
+import FirebaseFirestore
 
-/// A putter owned by the signed-in user, from `GET /api/putters`. Only the
-/// fields the session-setup picker needs are decoded.
-struct Putter: Codable, Identifiable, Hashable {
+/// A putter owned by the signed-in user, read from the `putters` Firestore
+/// collection. Only the fields the session-setup picker needs are kept. Putters
+/// are managed (created/edited) in the web app; iOS only reads them.
+struct Putter: Identifiable, Hashable {
     let id: String
     let name: String
     let isActive: Bool
+}
 
-    enum CodingKeys: String, CodingKey {
-        case id, name
-        case isActive = "is_active"
+extension Putter {
+    init(doc: DocumentSnapshot) {
+        id = doc.documentID
+        name = doc.get("name") as? String ?? ""
+        isActive = doc.get("is_active") as? Bool ?? false
     }
 }
 
@@ -38,19 +43,11 @@ struct BreakOption: Identifiable, Hashable {
 let sessionLengthOptionsFeet: [Int] = Array(1...40)
 
 /// The metadata a player sets for a session: which putter, the putt length
-/// (feet), and the break. Any field may be unset. Serializes to the
-/// `PATCH /api/sessions/{id}` body — every key is always present, with `null`
-/// clearing a field (matching how the backend applies the update wholesale).
+/// (feet), and the break. Any field may be unset. Applied to the session's
+/// Firestore doc by `SessionMetadataService.apply`, where a nil field is written
+/// as null to clear it.
 struct SessionMetadata: Equatable {
     var putterId: String?
     var lengthFeet: Int?
     var breakType: String?
-
-    var jsonBody: [String: Any] {
-        [
-            "putter_id": putterId.map { $0 as Any } ?? NSNull(),
-            "length_feet": lengthFeet.map { $0 as Any } ?? NSNull(),
-            "break_type": breakType.map { $0 as Any } ?? NSNull(),
-        ]
-    }
 }

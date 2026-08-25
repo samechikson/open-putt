@@ -2,16 +2,16 @@
 
 Persistence is **Firestore (Native mode)**, accessed two ways:
 
+- The **web and iOS apps** connect directly with the Firebase SDK, so
+  `firestore.rules` is the enforcement boundary: a signed-in user may only touch
+  (and create) docs whose `user_id` is their uid. iOS relays hardware-gate putts,
+  so it *creates* sessions/putts on ingest and keeps `putt_count` in sync; both
+  apps read, edit session metadata, and delete their own.
 - The **backend** (`backend/app/db.py`) connects with the Admin SDK
   (service-account credentials on Cloud Run; the Firestore **emulator** locally),
-  which **bypasses** security rules. It's the ingest path (hardware-gate putts) and
-  iOS's read / session-metadata API. Ownership is enforced in application code by a
-  `user_id` (the Firebase UID) on every document.
-- The **web app** connects directly with the Firebase Web SDK, so `firestore.rules`
-  is its enforcement boundary: a signed-in user may only touch docs whose `user_id`
-  is their uid. Sessions and putts are *created* only by the backend on ingest (the
-  rules forbid clients creating them); the web only reads, edits session metadata,
-  and deletes.
+  which **bypasses** security rules. It's now used only by the legacy ESP32
+  direct-post ingest path. Ownership is enforced in application code by the same
+  `user_id` field.
 
 There is no schema/migration file: Firestore is schemaless, and this project
 migrated off Postgres (the old `supabase/migrations/` + `db/schema.sql` are gone;

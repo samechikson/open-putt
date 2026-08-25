@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Pushed from the History tab: the individual putts of one session, with the
-/// ability to remove a stray one. Putts come from `GET /api/sessions/{id}/putts`;
-/// a delete goes through `DELETE /api/sessions/{id}/putts/{index}` and the
+/// ability to remove a stray one. Putts are read from Firestore; a delete removes
+/// the putt's Firestore doc (keeping the session's putt_count in sync) and the
 /// History list is reloaded so its counts stay in sync.
 ///
 /// Laid out as an inset-grouped `List` (styled to the "Organic" palette) so each

@@ -118,3 +118,28 @@ app to `POST /api/device/putts`. Sessions are now gate-only. What was deleted:
 - **iOS** — `SessionRow` dropped the `status` / `captured_at` fields it decoded.
 
 If you need the old video code, it's in the git history prior to this change.
+
+## Follow-up: clients moved onto the Firebase SDK
+
+After the above, both apps were taken **off the backend API** and onto the Firebase
+SDK, talking to Firestore directly (scoped by `firestore.rules`). The backend now
+only serves the legacy ESP32 direct-post ingest path.
+
+- **`firestore.rules`** — went from deny-all → per-user: a signed-in user may
+  read/write (and, for the iOS ingest, *create*) docs whose `user_id` is their uid.
+  Rules changes take effect only on `firebase deploy --only firestore:rules` — the
+  hosting workflow does **not** deploy them.
+- **Web app** — `sessions.ts` / `putters.ts` rewritten on the Web SDK; `api.ts`
+  (the Bearer-token fetch wrapper) deleted. The web app makes no backend calls.
+- **iOS app** — added the `FirebaseFirestore` SPM product (wired by hand in
+  `project.pbxproj`, mirroring `FirebaseAuth`). `SessionMetadataService` became the
+  Firestore data layer (reads + `apply` + `deletePutt` + **`ingest`**); the ingest
+  ports the old backend logic — session upsert, the `offset_mm` / per-sensor
+  **sign-inversion**, and the recomputed `putt_count`. `GatePuttRelay` and
+  `AppSettings` (backend URLs) were deleted; the model structs
+  (`SessionRow` / `SessionPutt` / `Putter`) now build from `DocumentSnapshot`.
+
+**Verifying the iOS build:** the `project.pbxproj` package edit can't be compiled
+outside Xcode — open the project, let SPM resolve `firebase-ios-sdk`, and build. If
+resolution fails, remove/re-add the `FirebaseFirestore` product via the target's
+**Frameworks, Libraries, and Embedded Content** and rebuild.

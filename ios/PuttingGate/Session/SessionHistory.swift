@@ -1,41 +1,30 @@
 import Foundation
+import FirebaseFirestore
 
-/// One gate session, from `GET /api/sessions`. Only the fields the History tab
-/// renders are decoded; the backend scopes every row to the signed-in user.
-/// Mirrors the frontend `SessionRow` (sessions.ts) and `db.py`'s `_SESSION_FIELDS`.
-struct SessionRow: Codable, Identifiable, Hashable {
+/// One gate session, read from the `sessions` Firestore collection (scoped to the
+/// signed-in user by its `user_id` field). Only the fields the History tab renders
+/// are kept. Mirrors the web `SessionRow` (sessions.ts) and `db.py`'s
+/// `_SESSION_FIELDS`.
+struct SessionRow: Identifiable, Hashable {
     let id: String
-    let createdAt: String
+    /// When the session was created — a gate session is created on its first putt.
+    let createdAt: Date?
     let lengthFeet: Int?
     let breakType: String?
     let puttCount: Int
     let putterId: String?
 
-    enum CodingKeys: String, CodingKey {
-        case id
-        case createdAt = "created_at"
-        case lengthFeet = "length_feet"
-        case breakType = "break_type"
-        case puttCount = "putt_count"
-        case putterId = "putter_id"
-    }
+    var timestamp: Date? { createdAt }
+}
 
-    /// When the session was created — a gate session is created on its first
-    /// relayed putt.
-    var timestamp: Date? {
-        SessionRow.parseDate(createdAt)
-    }
-
-    /// Parses the backend's ISO-8601 timestamps (with or without fractional
-    /// seconds; a space or `T` separator).
-    static func parseDate(_ raw: String?) -> Date? {
-        guard let raw, !raw.isEmpty else { return nil }
-        let normalized = raw.replacingOccurrences(of: " ", with: "T")
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = iso.date(from: normalized) { return d }
-        iso.formatOptions = [.withInternetDateTime]
-        return iso.date(from: normalized)
+extension SessionRow {
+    init(doc: DocumentSnapshot) {
+        id = doc.documentID
+        createdAt = (doc.get("created_at") as? Timestamp)?.dateValue()
+        lengthFeet = (doc.get("length_feet") as? NSNumber)?.intValue
+        breakType = doc.get("break_type") as? String
+        puttCount = (doc.get("putt_count") as? NSNumber)?.intValue ?? 0
+        putterId = doc.get("putter_id") as? String
     }
 }
 

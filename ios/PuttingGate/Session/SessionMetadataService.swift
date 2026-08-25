@@ -1,135 +1,193 @@
 import Foundation
+import FirebaseFirestore
+import FirebaseAuth
 
-/// Backend calls for session setup: list the user's putters, and tag a session
-/// with its metadata (putter / length / break). Mirrors `GatePuttRelay` — a
-/// Bearer token from `AuthManager`, URLs from `AppSettings`.
+/// The app's Firestore data layer. iOS reads and writes Firestore **directly**
+/// via the Firebase SDK (no backend API): it lists the user's putters/sessions,
+/// reads/deletes putts, tags session metadata, and **ingests** hardware-gate
+/// putts. Every document carries a `user_id`; `firestore.rules` scopes access to
+/// the signed-in user, and each query filters on `user_id` (which also makes the
+/// query rule-legal). Ownership-checked writes must keep `user_id == uid`.
+///
+/// Kept as an `ObservableObject` (it's injected as an environment object), though
+/// it publishes nothing itself.
 final class SessionMetadataService: ObservableObject {
-    private let settings: AppSettings
-    private let auth: AuthManager
-
-    init(settings: AppSettings, auth: AuthManager) {
-        self.settings = settings
-        self.auth = auth
-    }
+    private let db = Firestore.firestore()
 
     struct ServiceError: LocalizedError {
         let message: String
         var errorDescription: String? { message }
     }
 
-    /// The signed-in user's putters (active first), from `GET /api/putters`.
+    /// The signed-in user's uid, or a thrown error. The app gates all data views
+    /// behind auth, so a missing user here is an unexpected state.
+    private func uid() throws -> String {
+        guard let uid = Auth.auth().currentUser?.uid else {
+            throw ServiceError(message: "You're signed out. Sign in and try again.")
+        }
+        return uid
+    }
+
+    // MARK: Reads
+
+    /// The signed-in user's putters (active first, then newest). A single
+    /// equality filter (user_id) keeps this index-free; ordering is client-side.
     func fetchPutters() async throws -> [Putter] {
-        guard let url = settings.puttersURL else {
-            throw ServiceError(message: "No backend URL configured")
+        let uid = try uid()
+        let snap = try await db.collection("putters")
+            .whereField("user_id", isEqualTo: uid)
+            .getDocuments()
+        // Single comparator (Swift's sort isn't guaranteed stable): active first,
+        // then newest created.
+        let sorted = snap.documents.sorted { a, b in
+            let aActive = a.get("is_active") as? Bool ?? false
+            let bActive = b.get("is_active") as? Bool ?? false
+            if aActive != bActive { return aActive }
+            let aTime = (a.get("created_at") as? Timestamp)?.dateValue() ?? .distantPast
+            let bTime = (b.get("created_at") as? Timestamp)?.dateValue() ?? .distantPast
+            return aTime > bTime
         }
-        var req = URLRequest(url: url)
-        if let token = await auth.validAccessToken() {
-            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        let (data, response) = try await URLSession.shared.data(for: req)
-        try Self.check(response, data)
-        return try JSONDecoder().decode([Putter].self, from: data)
+        return sorted.map(Putter.init(doc:))
     }
 
-    /// The signed-in user's sessions, newest first, from `GET /api/sessions`.
+    /// The signed-in user's sessions, newest first.
     func fetchSessions() async throws -> [SessionRow] {
-        guard let url = settings.sessionsURL else {
-            throw ServiceError(message: "No backend URL configured")
+        let uid = try uid()
+        let snap = try await db.collection("sessions")
+            .whereField("user_id", isEqualTo: uid)
+            .getDocuments()
+        let sorted = snap.documents.sorted { a, b in
+            let aTime = (a.get("created_at") as? Timestamp)?.dateValue() ?? .distantPast
+            let bTime = (b.get("created_at") as? Timestamp)?.dateValue() ?? .distantPast
+            return aTime > bTime
         }
-        var req = URLRequest(url: url)
-        if let token = await auth.validAccessToken() {
-            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        let (data, response) = try await URLSession.shared.data(for: req)
-        try Self.check(response, data)
-        return try JSONDecoder().decode([SessionRow].self, from: data)
+        return sorted.map(SessionRow.init(doc:))
     }
 
-    /// The putts of one owned session (ordered by putt index), from
-    /// `GET /api/sessions/{id}/putts`. Powers the session-detail list.
+    /// The putts of one owned session, ordered by putt index. Scoped by user_id
+    /// (which also satisfies the security rule for the query).
     func fetchPutts(sessionId: String) async throws -> [SessionPutt] {
-        guard let url = settings.sessionPuttsURL(id: sessionId) else {
-            throw ServiceError(message: "No backend URL configured")
-        }
-        var req = URLRequest(url: url)
-        if let token = await auth.validAccessToken() {
-            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        let (data, response) = try await URLSession.shared.data(for: req)
-        try Self.check(response, data)
-        return try JSONDecoder().decode([SessionPutt].self, from: data)
+        let uid = try uid()
+        let snap = try await db.collection("putts")
+            .whereField("user_id", isEqualTo: uid)
+            .whereField("session_id", isEqualTo: sessionId)
+            .getDocuments()
+        return snap.documents
+            .map(SessionPutt.init(doc:))
+            .sorted { $0.puttIndex < $1.puttIndex }
     }
 
-    /// Delete one putt from an owned session via
-    /// `DELETE /api/sessions/{id}/putts/{index}`. A 404 (the putt is already
-    /// gone) counts as success, so the delete is idempotent.
-    func deletePutt(sessionId: String, puttIndex: Int) async throws {
-        guard let url = settings.puttURL(sessionId: sessionId, puttIndex: puttIndex) else {
-            throw ServiceError(message: "No backend URL configured")
-        }
-        var req = URLRequest(url: url)
-        req.httpMethod = "DELETE"
-        if let token = await auth.validAccessToken() {
-            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        let (data, response) = try await URLSession.shared.data(for: req)
-        guard let http = response as? HTTPURLResponse,
-              (200..<300).contains(http.statusCode) || http.statusCode == 404
-        else {
-            throw ServiceError(message: Self.serverMessage(from: data) ?? "Delete failed")
-        }
-    }
-
-    /// The `offset_mm` of every putt across the given sessions, from
-    /// `POST /api/putts/offsets`. Used for the History push/pull bias summary.
+    /// Every putt's `offset_mm` across the given sessions (for the History bias
+    /// summary). One user-scoped query, filtered to the requested sessions.
     func fetchOffsets(sessionIds: [String]) async throws -> [Double] {
-        guard let url = settings.puttsOffsetsURL else {
-            throw ServiceError(message: "No backend URL configured")
+        if sessionIds.isEmpty { return [] }
+        let uid = try uid()
+        let wanted = Set(sessionIds)
+        let snap = try await db.collection("putts")
+            .whereField("user_id", isEqualTo: uid)
+            .getDocuments()
+        return snap.documents.compactMap { doc in
+            guard let sid = doc.get("session_id") as? String, wanted.contains(sid) else {
+                return nil
+            }
+            return (doc.get("offset_mm") as? NSNumber)?.doubleValue
         }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let token = await auth.validAccessToken() {
-            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["session_ids": sessionIds])
-        let (data, response) = try await URLSession.shared.data(for: req)
-        try Self.check(response, data)
-        struct OffsetsResponse: Decodable { let offsets: [Double] }
-        return try JSONDecoder().decode(OffsetsResponse.self, from: data).offsets
     }
 
-    /// Tag a session via `PATCH /api/sessions/{id}`. The session must already
-    /// exist — the gate creates it on its first putt — so call this only after a
-    /// putt of that session has been relayed.
+    // MARK: Writes
+
+    /// Tag a session with its metadata (putter / length / break). The session
+    /// must already exist (the gate creates it on its first putt). `merge` so the
+    /// ownership / created_at / putt_count fields are preserved; a nil field is
+    /// written as null to clear it.
     func apply(sessionId: String, metadata: SessionMetadata) async throws {
-        guard let url = settings.sessionURL(id: sessionId) else {
-            throw ServiceError(message: "No backend URL configured")
-        }
-        var req = URLRequest(url: url)
-        req.httpMethod = "PATCH"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let token = await auth.validAccessToken() {
-            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        req.httpBody = try JSONSerialization.data(withJSONObject: metadata.jsonBody)
-        let (data, response) = try await URLSession.shared.data(for: req)
-        try Self.check(response, data)
+        _ = try uid()
+        try await db.collection("sessions").document(sessionId).setData([
+            "length_feet": metadata.lengthFeet.map { $0 as Any } ?? NSNull(),
+            "break_type": metadata.breakType.map { $0 as Any } ?? NSNull(),
+            "putter_id": metadata.putterId.map { $0 as Any } ?? NSNull(),
+        ], merge: true)
     }
 
-    private static func check(_ response: URLResponse, _ data: Data) throws {
-        guard let http = response as? HTTPURLResponse,
-              (200..<300).contains(http.statusCode)
-        else {
-            throw ServiceError(message: serverMessage(from: data) ?? "Request failed")
-        }
+    /// Delete one putt from an owned session and keep the session's putt_count in
+    /// sync. Deleting a missing doc is a no-op, so this is idempotent.
+    func deletePutt(sessionId: String, puttIndex: Int) async throws {
+        let uid = try uid()
+        try await db.collection("putts")
+            .document(Self.puttDocId(sessionId, puttIndex))
+            .delete()
+        try await updatePuttCount(sessionId: sessionId, uid: uid)
     }
 
-    /// The `detail` string from a FastAPI error body, if present.
-    private static func serverMessage(from body: Data?) -> String? {
-        guard let body,
-              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
-        else { return nil }
-        return json["detail"] as? String
+    // MARK: Ingest (hardware gate)
+
+    /// Persist one gate putt: upsert its session (created already-complete on the
+    /// first putt) and write the putt. Idempotent per (session, index) via the
+    /// deterministic doc id, so a re-send overwrites rather than duplicates.
+    ///
+    /// The stored sign convention matches the web app and the old backend ingest:
+    /// `offset_mm` (and the per-sensor offsets) are **negated** from the firmware
+    /// sign, because the display helpers (`golferSide`) negate the stored value to
+    /// recover the golfer's left/right. `direction` is derived from the PUSH /
+    /// PULL / CENTER label (which carries the firmware sign) and is NOT negated.
+    func ingest(_ putt: GatePutt, sessionId: String) async throws {
+        let uid = try uid()
+
+        let sessionRef = db.collection("sessions").document(sessionId)
+        let sessionSnap = try await sessionRef.getDocument()
+        if !sessionSnap.exists {
+            try await sessionRef.setData([
+                "user_id": uid,
+                "status": "done",
+                "putt_count": 0,
+                "created_at": FieldValue.serverTimestamp(),
+            ])
+        }
+
+        let storedSensors: [Any] = (putt.sensors ?? []).map { value in
+            value.map { -$0 as Any } ?? NSNull()
+        }
+        try await db.collection("putts")
+            .document(Self.puttDocId(sessionId, putt.puttIndex))
+            .setData([
+                "session_id": sessionId,
+                "user_id": uid,
+                "putt_index": putt.puttIndex,
+                "offset_mm": -putt.offsetMm,
+                "direction": Self.direction(for: putt.label),
+                "speed_mps": putt.speedMps.map { $0 as Any } ?? NSNull(),
+                "sensor_offsets_mm": storedSensors,
+            ], merge: true)
+
+        try await updatePuttCount(sessionId: sessionId, uid: uid)
+    }
+
+    // MARK: Helpers
+
+    /// Recompute putt_count from the actual putt docs (drift-free under retries).
+    private func updatePuttCount(sessionId: String, uid: String) async throws {
+        let agg = try await db.collection("putts")
+            .whereField("user_id", isEqualTo: uid)
+            .whereField("session_id", isEqualTo: sessionId)
+            .count
+            .getAggregation(source: .server)
+        try await db.collection("sessions").document(sessionId).setData(
+            ["putt_count": agg.count.intValue], merge: true
+        )
+    }
+
+    /// Deterministic putt doc id — the per-(session, index) idempotency key.
+    private static func puttDocId(_ sessionId: String, _ puttIndex: Int) -> String {
+        "\(sessionId)_\(puttIndex)"
+    }
+
+    /// Map the gate's PUSH / PULL / CENTER label to the stored side. PUSH (ball
+    /// past center, the golfer's right) → "right"; PULL → "left".
+    private static func direction(for label: String) -> String {
+        switch label.uppercased() {
+        case "PUSH": return "right"
+        case "PULL": return "left"
+        default: return "center"
+        }
     }
 }

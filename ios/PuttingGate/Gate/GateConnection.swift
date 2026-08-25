@@ -8,25 +8,25 @@ enum RelayStatus: Equatable {
     case failed(String)
 }
 
-/// A putt received over BLE, plus its backend-relay status (for the live view).
+/// A putt received over BLE, plus its persist status (for the live view).
 struct ReceivedPutt: Identifiable {
     let putt: GatePutt
-    /// The backend session id this putt was relayed under. Usually the firmware's
-    /// session id, but a mid-run length/break split relays under a freshly minted
-    /// id (see `GateConnection`), so it's captured per-putt so a delete targets
-    /// the right session.
+    /// The session id this putt was saved under. Usually the firmware's session
+    /// id, but a mid-run length/break split saves under a freshly minted id (see
+    /// `GateConnection`), so it's captured per-putt so a delete targets the right
+    /// session.
     let sessionId: String
     var relay: RelayStatus = .sending
     var id: String { putt.id }
 }
 
 /// Connects to the ESP32 putting gate over BLE (as a central), receives each
-/// putt as a notification, shows it live, and relays it to the backend.
+/// putt as a notification, shows it live, and persists it to Firestore.
 ///
 /// The `CBCentralManager` is created on the main queue, so all delegate
 /// callbacks — and thus every `@Published` mutation — happen on the main thread,
-/// which is what SwiftUI requires. The only off-main work is the async relay,
-/// whose status update hops back to the main actor.
+/// which is what SwiftUI requires. The only off-main work is the async Firestore
+/// write, whose status update hops back to the main actor.
 final class GateConnection: NSObject, ObservableObject {
 
     // Must match the firmware (putt_tracker.ino).
@@ -67,7 +67,7 @@ final class GateConnection: NSObject, ObservableObject {
 
     private var central: CBCentralManager!
     private var gate: CBPeripheral?
-    private let relay: GatePuttRelay
+    private let service: SessionMetadataService
     private let config: SessionConfigStore
     private let calibration: CalibrationStore
     private let decoder = JSONDecoder()
@@ -81,10 +81,10 @@ final class GateConnection: NSObject, ObservableObject {
     private var startNewSessionRequested = false
 
     init(
-        settings: AppSettings, auth: AuthManager, config: SessionConfigStore,
-        calibration: CalibrationStore
+        config: SessionConfigStore, calibration: CalibrationStore,
+        service: SessionMetadataService
     ) {
-        self.relay = GatePuttRelay(settings: settings, auth: auth)
+        self.service = service
         self.config = config
         self.calibration = calibration
         super.init()
@@ -149,14 +149,16 @@ final class GateConnection: NSObject, ObservableObject {
 
     // MARK: Relay
 
-    private func relayPutt(_ putt: GatePutt, body: Data, sessionId: String, tagSession: Bool) {
+    /// Persist a received putt to Firestore under the signed-in user. The session
+    /// is created (already complete) by its first putt, so only once that putt is
+    /// saved do we tag the session with the player's chosen putter / length /
+    /// break. `corrected` already carries any session split (`sessionId`) and
+    /// center calibration — the ingest handles the stored sign convention.
+    private func relayPutt(_ putt: GatePutt, sessionId: String, tagSession: Bool) {
         Task {
             do {
-                try await relay.send(body)
+                try await service.ingest(putt, sessionId: sessionId)
                 await MainActor.run { self.setStatus(putt.id, .sent) }
-                // The session row is created backend-side by its first putt, so
-                // only now — once that putt is saved — can we tag the session
-                // with the player's chosen putter / length / break.
                 if tagSession {
                     await config.apply(to: sessionId)
                 }
@@ -168,27 +170,6 @@ final class GateConnection: NSObject, ObservableObject {
         }
     }
 
-    /// The `/device/putts` body to relay for `raw`: the BLE payload verbatim,
-    /// except where we've diverged from it — a session split swaps `session_id`,
-    /// and a center calibration replaces `offset_mm` / `label` / `sensors` with
-    /// the corrected values (`corrected` is `raw.applying(calibration)` or `raw`).
-    private static func outgoingBody(
-        rawJSON: Data, raw: GatePutt, corrected: GatePutt, sessionId: String
-    ) -> Data {
-        var overrides: [String: Any] = [:]
-        if sessionId != raw.sessionID { overrides["session_id"] = sessionId }
-        if corrected.offsetMm != raw.offsetMm { overrides["offset_mm"] = corrected.offsetMm }
-        if corrected.label != raw.label { overrides["label"] = corrected.label }
-        if let sensors = corrected.sensors, sensors != raw.sensors {
-            overrides["sensors"] = sensors.map { $0.map { $0 as Any } ?? NSNull() }
-        }
-        guard !overrides.isEmpty,
-              var obj = (try? JSONSerialization.jsonObject(with: rawJSON)) as? [String: Any]
-        else { return rawJSON }
-        for (key, value) in overrides { obj[key] = value }
-        return (try? JSONSerialization.data(withJSONObject: obj)) ?? rawJSON
-    }
-
     private func setStatus(_ id: String, _ status: RelayStatus) {
         if let idx = putts.firstIndex(where: { $0.id == id }) {
             putts[idx].relay = status
@@ -197,18 +178,18 @@ final class GateConnection: NSObject, ObservableObject {
 
     // MARK: Delete
 
-    /// Remove one putt — a mishit or a false trip — from the live feed and the
-    /// backend. A putt whose relay failed never reached the backend, so it's just
-    /// dropped locally; otherwise the backend row is deleted first (a 404 there is
-    /// treated as already-gone) and the row is removed only once that succeeds.
-    /// Throws if the backend delete fails, leaving the row in place.
+    /// Remove one putt — a mishit or a false trip — from the live feed and
+    /// Firestore. A putt whose write failed never reached Firestore, so it's just
+    /// dropped locally; otherwise the Firestore doc is deleted first and the row
+    /// is removed only once that succeeds. Throws if the delete fails, leaving the
+    /// row in place.
     @MainActor
     func deletePutt(_ received: ReceivedPutt) async throws {
         if case .failed = received.relay {
             putts.removeAll { $0.id == received.id }
             return
         }
-        try await relay.deletePutt(
+        try await service.deletePutt(
             sessionId: received.sessionId, puttIndex: received.putt.puttIndex
         )
         putts.removeAll { $0.id == received.id }
@@ -318,15 +299,12 @@ extension GateConnection: CBCentralManagerDelegate, CBPeripheralDelegate {
         }
         let sessionId = activeSessionId ?? putt.sessionID
         // Apply the active center calibration (if any) so the displayed and
-        // relayed reading is the corrected, consistent one.
+        // persisted reading is the corrected, consistent one.
         let corrected = calibration.active.map { putt.applying($0) } ?? putt
-        let body = Self.outgoingBody(
-            rawJSON: data, raw: putt, corrected: corrected, sessionId: sessionId
-        )
         putts.insert(ReceivedPutt(putt: corrected, sessionId: sessionId), at: 0)   // newest first
         // Bound the live feed so a marathon session can't grow it without limit
-        // (every putt is persisted server-side; History shows the full record).
+        // (every putt is persisted in Firestore; History shows the full record).
         if putts.count > Self.maxLivePutts { putts.removeLast(putts.count - Self.maxLivePutts) }
-        relayPutt(corrected, body: body, sessionId: sessionId, tagSession: isNewSession)
+        relayPutt(corrected, sessionId: sessionId, tagSession: isNewSession)
     }
 }

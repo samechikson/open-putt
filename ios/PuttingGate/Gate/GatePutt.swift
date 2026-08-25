@@ -1,8 +1,8 @@
 import Foundation
 
-/// One putt received from the hardware gate over BLE. Mirrors the JSON the
-/// firmware sends and the backend's `POST /api/device/putts` body, so the raw
-/// bytes can be relayed verbatim.
+/// One putt received from the hardware gate over BLE. Decodes the JSON the
+/// firmware sends; the app applies any center calibration, then writes it to
+/// Firestore (see `SessionMetadataService.ingest`).
 struct GatePutt: Codable, Identifiable {
     let sessionID: String
     let puttIndex: Int
@@ -56,7 +56,7 @@ extension GatePutt {
     /// sensors in sequence, so a complete `sensors` array (no missing readings)
     /// is the mark of a genuine putt; a partial reading is almost always an
     /// errant trip (e.g. sunlight outdoors) and is ignored. Mirrors the firmware
-    /// guard and the backend's `POST /api/device/putts` check.
+    /// guard (the ingest also drops partial readings before they're stored).
     var hasAllSensors: Bool {
         guard let sensors, !sensors.isEmpty else { return false }
         return !sensors.contains(where: { $0 == nil })

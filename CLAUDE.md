@@ -19,55 +19,56 @@ git history if you need the old shape.)
 
 The components:
 
-- **`backend/`** — Python / FastAPI service. Ingests hardware-gate putts into
-  Firestore (via the Admin SDK) and serves iOS's reads + session-metadata API.
+- **`backend/`** — Python / FastAPI service. Now used **only** for the legacy
+  ESP32 direct-post ingest path (`POST /api/device/putts` with a shared device
+  token), writing to Firestore via the Admin SDK. The web and iOS apps no longer
+  call it.
 - **`frontend/`** — React 19 + TypeScript + Vite + Tailwind v4 web app. Reads and
   writes Firestore **directly** via the Firebase Web SDK (no backend calls): browse
   sessions/putts and stats, edit session metadata, manage putters. Served by
   Firebase Hosting.
 - **`ios/`** — SwiftUI app (`PuttingGate`). A **BLE central** that pairs with the
-  hardware gate, relays each putt to the backend, and shows history/settings.
+  hardware gate and writes each putt **directly to Firestore** via the Firebase
+  iOS SDK (`FirebaseFirestore`); also shows history/settings. No backend calls.
 - **`microcontroller/`** — ESP32 (Arduino C++) firmware for the physical laser
   gate + ToF sensors. See its own `README.md` for wiring, geometry, and BLE.
 
 Plus `backend/db/README.md` (the Firestore collection model), `firestore.rules` /
-`firestore.indexes.json` (per-user client access for the web app; no composite
-indexes), and
+`firestore.indexes.json` (per-user client access for the web + iOS apps; no
+composite indexes), and
 `docs/` (operator runbooks). A top-level `README.md` gives the human-facing
 overview.
 
 ## Architecture at a glance
 
 ```
-Hardware gate (ESP32) ─BLE→ iOS app ──→ Cloud Run: FastAPI (Admin SDK) ──┐
-                                                                          ├─→ Firestore (Native)
-Web app ──(Firebase Web SDK, rules-scoped)───────────────────────────────┘
-   └─ Firebase Auth (ID tokens)
+Hardware gate (ESP32) ─BLE→ iOS app ──(Firebase iOS SDK)──┐
+Web app ──────────────────(Firebase Web SDK)──────────────┼─→ Firestore (Native)
+   └─ Firebase Auth (ID tokens)                            │   ▲ firestore.rules
+ESP32 (legacy direct post) → Cloud Run: FastAPI (Admin SDK)┘   (Admin bypasses rules)
 ```
 
 Key facts that shape everything:
 
-- **Two clients touch Firestore, split by trust.** The **web app** reads and
-  writes Firestore **directly** via the Firebase Web SDK; `firestore.rules` is the
-  enforcement boundary — a signed-in user can only touch docs whose `user_id` is
-  their uid. The **backend** (Cloud Run) uses the Firestore **Admin SDK**, which
-  *bypasses* rules; it's the ingest path for hardware-gate putts and iOS's read /
-  session-metadata API. Sessions and putts are created only by the backend on
-  ingest (rules forbid clients from creating them), so the web app only reads
-  them, edits session metadata, or deletes.
-- **Ownership is a `user_id` field on every doc.** Both paths scope by it — the
-  web app's queries filter `user_id == uid` (also what makes them rule-legal), and
-  the backend filters the same in application code. Get this wrong and data leaks.
-- **The backend API is mounted under `/api`.** iOS calls the Cloud Run URL
-  directly (`AppSettings.backendBaseURL` ends in `/api`); Firebase Hosting also
-  rewrites `/api/**` to Cloud Run (same-origin) but the **web app no longer uses
-  the backend** — it went straight to the Web SDK.
-- **Hardware-gate putts are the only putt source.** They arrive already-measured
-  over BLE and are persisted via `POST /api/device/putts` (`main.py`) — no video,
-  no analysis pass, no async job. A session is created on its first putt (already
-  complete) and gains putts as the player putts; clients poll for new putts.
+- **The apps talk to Firestore directly; the backend barely exists.** Both the
+  **web app** (Firebase Web SDK) and the **iOS app** (`FirebaseFirestore`) read and
+  write Firestore directly, so `firestore.rules` is the enforcement boundary — a
+  signed-in user can only touch docs whose `user_id` is their uid. The **backend**
+  (Cloud Run, Admin SDK, *bypasses* rules) is now only the legacy ESP32 direct-post
+  ingest path; if you don't run an ESP32 posting directly, nothing uses it.
+- **Ownership is a `user_id` field on every doc.** Clients scope every query by it
+  — `user_id == uid` is both the ownership filter and what makes the query
+  rule-legal. Get this wrong and data leaks.
+- **iOS is the primary ingest path.** It relays each hardware-gate putt over BLE
+  and writes it straight to Firestore — creating the session (already complete) on
+  its first putt and keeping `putt_count` in sync. It applies the load-bearing
+  sign convention on write (see `SessionMetadataService.ingest`): `offset_mm` and
+  the per-sensor offsets are **negated** from the firmware sign so the shared
+  `golferSide` display helper (which negates the stored value) recovers the
+  golfer's left/right; `direction` comes from the PUSH/PULL/CENTER label and is
+  not negated.
 - **No video, no heavy infra.** There is no Cloud Storage, no Cloud Tasks, no
-  OpenCV, no signed URLs — the backend is a thin CRUD API over Firestore.
+  OpenCV, no signed URLs.
 
 ### Migration history (important context)
 
@@ -85,7 +86,7 @@ lingering "Supabase" reference in a doc means the old Postgres database.
 | File | Responsibility |
 |------|----------------|
 | `main.py` | FastAPI app: the `POST /device/putts` BLE-gate ingest, the session/putt reads, session-metadata edit + delete, and putters CRUD. Mounts the API under `/api`. A thin CRUD layer — no analysis. |
-| `db.py` | The backend's Firestore client (Admin SDK; bypasses rules; lazy, fail-soft). Ingest + iOS's ownership-scoped reads/writes. Single-field filters + Python-side ordering (no composite indexes). Field lists (`_SESSION_FIELDS`, etc.) mirror the frontend TS types. See `backend/db/README.md`. |
+| `db.py` | The backend's Firestore client (Admin SDK; bypasses rules; lazy, fail-soft). Now exercised only by the ESP32 direct-post ingest path. Single-field filters + Python-side ordering (no composite indexes). Field lists (`_SESSION_FIELDS`, etc.) mirror the TS/Swift models. See `backend/db/README.md`. |
 | `auth.py` | `require_user` / `require_device` / `require_user_or_device` FastAPI dependencies → the Firebase UID. In local dev `AUTH_DEV_UID` short-circuits verification. |
 
 ### Conventions
@@ -131,38 +132,44 @@ full putter CRUD).
 
 ## iOS (`ios/PuttingGate/`)
 
-SwiftUI + SwiftData, Firebase (`FirebaseCore` / `FirebaseAuth`). Entry point
-`PuttingGateApp.swift` configures Firebase, builds the object graph, and gates the
-UI behind auth. Tabs: **Gate / History / Settings** (`MainTabView`).
+SwiftUI, Firebase (`FirebaseCore` / `FirebaseAuth` / `FirebaseFirestore`). Entry
+point `PuttingGateApp.swift` configures Firebase, builds the object graph, and
+gates the UI behind auth. Tabs: **Gate / History / Settings** (`MainTabView`).
 
-The app is a **BLE central** that pairs with the hardware gate and relays each
-putt to the backend — it no longer records or uploads video itself.
+The app is a **BLE central** that pairs with the hardware gate and writes each
+putt **directly to Firestore** via the Firebase iOS SDK — no backend calls, no
+video.
 
 - `Gate/` — `GateConnection` (BLE central; scans for and subscribes to the
-  `PuttingGate` peripheral), `GatePutt` / `GatePuttRelay` (decode a putt
-  notification and `POST /api/device/putts`), `GateCalibration` +
-  `CalibrationStore` (center-calibration state). BLE service/characteristic UUIDs
-  must match the firmware (`microcontroller/putt_tracker`).
-- `Session/` — `SessionConfig` / `SessionConfigStore` (putter, distance, break for
-  the current session; a length/break change starts a new session),
-  `SessionHistory`, `SessionMetadataService`.
-- `Views/` — `GateView`, `HistoryView`, `SettingsView`, `CalibrationView`,
-  `LoginView`.
-- `Config/AppSettings.swift` — `backendBaseURL` is **hardcoded** to the prod Cloud
-  Run URL (ends in `/api`).
-- `Auth/`, `Theme/` (the "Organic" design system), `Resources/`.
+  `PuttingGate` peripheral, decodes each putt notification into a `GatePutt`,
+  applies any center calibration, and hands it to the service to persist),
+  `GatePutt`, `GateCalibration` + `CalibrationStore` (center-calibration state).
+  BLE service/characteristic UUIDs must match the firmware
+  (`microcontroller/putt_tracker`).
+- `Session/` — `SessionMetadataService` (the **Firestore data layer**: reads
+  sessions/putts/putters, edits session metadata, deletes, and `ingest`s gate
+  putts — session upsert, sign-inversion, `putt_count`), `SessionConfig` /
+  `SessionConfigStore` (putter, distance, break; a length/break change starts a
+  new session), `SessionHistory`, and the `SessionRow` / `SessionPutt` / `Putter`
+  models (built from `DocumentSnapshot`).
+- `Views/` — `GateView`, `HistoryView`, `SessionDetailView`, `SettingsView`,
+  `CalibrationView`, `LoginView`.
+- `Auth/` (Firebase Auth wrapper), `Theme/` (the "Organic" design system),
+  `Resources/`.
 
-`GoogleService-Info.plist` is bundled in the target. Firebase SDK is added via
-Swift Package Manager (see the migration runbook, step 6).
+`GoogleService-Info.plist` is bundled in the target. Firebase products are added
+via Swift Package Manager — `FirebaseFirestore` is wired in `project.pbxproj`
+(mirroring the `FirebaseAuth` entries; the file group is a synchronized group, so
+adding/removing `.swift` files needs no project edit).
 
 ## Database
 
-**Firestore (Native mode)** — schemaless, so there's no migration file. Accessed
-two ways: the **web app** directly via the Firebase Web SDK (scoped by
-`firestore.rules`), and the **backend** via the Admin SDK (bypasses rules) for
-ingest + iOS. Session/putt *creation* is backend-only; the web reads, edits
-metadata, and deletes. The full collection model lives in `backend/db/README.md`.
-In brief:
+**Firestore (Native mode)** — schemaless, so there's no migration file. The
+**web and iOS apps** both access it directly via the Firebase SDK, scoped by
+`firestore.rules` (a signed-in user may only touch docs whose `user_id` is their
+uid, and may create their own). The **backend** (Admin SDK, bypasses rules) writes
+only via the legacy ESP32 direct-post path. The full collection model lives in
+`backend/db/README.md`. In brief:
 
 - `putters/{uuid}` — user-owned clubs (≤1 active per user, enforced in
   `set_active_putter`).
@@ -278,8 +285,10 @@ gotchas.
 - **Cross-cutting changes:** a change to the data shape usually spans `db.py`'s
   `_*_FIELDS` + `backend/db/README.md` + frontend TS (and sometimes iOS). Trace
   the field through all layers.
-- **The sign convention is load-bearing.** `/device/putts` pre-inverts the stored
-  `offset_mm` (and per-sensor offsets) so the shared `golferSide` helper (web +
-  iOS), which negates it, reports the golfer's left/right. Keep the two in sync.
+- **The sign convention is load-bearing, and now enforced in two writers.** Both
+  iOS ingest (`SessionMetadataService.ingest`) and the backend's `/device/putts`
+  (ESP32 path) pre-invert the stored `offset_mm` (and per-sensor offsets) so the
+  shared `golferSide` display helper (web + iOS), which negates it, reports the
+  golfer's left/right. Keep all three in sync.
 - **Auth branches on `AUTH_DEV_UID`** (skip vs. verify tokens) and persistence on
   whether Firestore is configured (project id / emulator vs. fail-soft no-op).

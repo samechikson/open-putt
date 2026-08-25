@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The "History" tab: a push/pull bias summary, an activity heatmap, and the
-/// player's recent sessions. Read-only; data comes from `GET /api/sessions`.
+/// player's recent sessions. Read-only; data comes from Firestore.
 struct HistoryView: View {
     @EnvironmentObject private var history: SessionHistoryStore
     @EnvironmentObject private var config: SessionConfigStore
