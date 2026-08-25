@@ -1,0 +1,15 @@
+rules_version = '2';
+
+// The Putting Gate backend is the ONLY Firestore client: the browser, iOS app,
+// and hardware gate all go through the FastAPI service, which connects with the
+// Admin SDK (service-account credentials) and therefore bypasses these rules.
+// No client ever reaches Firestore directly, so deny all direct access. If a
+// direct-from-client path is ever added, replace this with per-collection rules
+// scoped by request.auth.uid == resource.data.user_id.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

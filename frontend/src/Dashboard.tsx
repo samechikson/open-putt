@@ -9,19 +9,17 @@ import {
   BREAK_DIRECTIONS,
   type BreakDirection,
   type SessionRow,
-  type SessionStatus,
 } from "./sessions";
 import { fetchPutters } from "./putters";
 import { biasWord, golferSide } from "./analysis";
 import { mean } from "./stats";
 import ContributionGraph from "./ContributionGraph";
 
-// How many recent completed sessions the home-page summary considers.
+// How many recent sessions the home-page summary considers.
 type SessionWindow = number | "all";
 const WINDOW_OPTIONS: SessionWindow[] = [5, 10, 20, "all"];
 
 interface DashboardProps {
-  onNewSession: () => void;
   onOpenSession: (id: string) => void;
 }
 
@@ -34,36 +32,7 @@ function formatDate(iso: string): string {
   });
 }
 
-function StatusBadge({ status }: { status: SessionStatus }) {
-  const label =
-    status === "processing"
-      ? "Processing"
-      : status.charAt(0).toUpperCase() + status.slice(1);
-  // Queued/Processing read as in-progress (soft accent); an error reads as a
-  // hairline outline in the deep accent.
-  const cls = status === "error" ? "tag tag-outline" : "tag tag-accent";
-  return (
-    <span
-      className={cls}
-      style={
-        status === "error"
-          ? {
-              fontSize: 10,
-              color: "var(--color-accent-800)",
-              borderColor: "var(--color-accent-800)",
-            }
-          : { fontSize: 10 }
-      }
-    >
-      {label}
-    </span>
-  );
-}
-
-export default function Dashboard({
-  onNewSession,
-  onOpenSession,
-}: DashboardProps) {
+export default function Dashboard({ onOpenSession }: DashboardProps) {
   // undefined = loading, null = error, array = loaded
   const [sessions, setSessions] = useState<SessionRow[] | null | undefined>(
     undefined,
@@ -139,14 +108,15 @@ export default function Dashboard({
 
   const filtersActive = lengthFilter !== "all" || breakFilter !== "all";
 
-  // The most recent completed sessions in the selected window, honouring the
-  // putt-type filters (rows arrive newest-first from fetchSessions).
+  // The most recent sessions in the selected window, honouring the putt-type
+  // filters (rows arrive newest-first from fetchSessions).
   const windowSessionIds = useMemo(() => {
     if (!filteredSessions) return [];
-    const done = filteredSessions.filter((s) => s.status === "done");
-    return (sessionWindow === "all" ? done : done.slice(0, sessionWindow)).map(
-      (s) => s.id,
-    );
+    return (
+      sessionWindow === "all"
+        ? filteredSessions
+        : filteredSessions.slice(0, sessionWindow)
+    ).map((s) => s.id);
   }, [filteredSessions, sessionWindow]);
 
   const idsKey = windowSessionIds.join(",");
@@ -168,7 +138,7 @@ export default function Dashboard({
   const bias = offsets ? mean(offsets) : null;
   const biasSide = bias == null ? "center" : golferSide(bias);
   const totalPutts = offsets?.length ?? 0;
-  const hasDoneSessions = windowSessionIds.length > 0;
+  const hasWindowSessions = windowSessionIds.length > 0;
 
   const selectStyle = { width: "auto", padding: "8px 14px" } as const;
 
@@ -250,7 +220,7 @@ export default function Dashboard({
             style={{ flex: "1 1 440px", minWidth: 0 }}
           />
 
-          {hasDoneSessions && (
+          {hasWindowSessions && (
             <div
               className="card elev-sm"
               style={{ flex: "1 1 360px", minWidth: 0 }}
@@ -328,9 +298,6 @@ export default function Dashboard({
         <div style={{ fontFamily: "var(--font-heading)", fontSize: 24 }}>
           Your Sessions
         </div>
-        <button type="button" onClick={onNewSession} className="btn btn-primary">
-          + New Session
-        </button>
       </div>
 
       {sessions === undefined && (
@@ -359,17 +326,10 @@ export default function Dashboard({
 
       {sessions && sessions.length === 0 && (
         <div className="card elev-sm" style={{ padding: 32, textAlign: "center" }}>
-          <p style={{ margin: "0 0 16px", color: "var(--color-neutral-700)" }}>
-            No sessions yet. Upload a putting video to get started.
+          <p style={{ margin: 0, color: "var(--color-neutral-700)" }}>
+            No sessions yet. Roll a few putts through the gate — they'll show up
+            here as you play.
           </p>
-          <button
-            type="button"
-            onClick={onNewSession}
-            className="btn btn-primary"
-            style={{ alignSelf: "center" }}
-          >
-            + New Session
-          </button>
         </div>
       )}
 
@@ -409,19 +369,14 @@ export default function Dashboard({
               >
                 <div style={{ minWidth: 0 }}>
                   <div
-                    style={{ display: "flex", alignItems: "center", gap: 8 }}
+                    style={{
+                      fontWeight: 600,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
                   >
-                    <span
-                      style={{
-                        fontWeight: 600,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {s.file_name ?? "Session"}
-                    </span>
-                    {s.status !== "done" && <StatusBadge status={s.status} />}
+                    {formatDate(s.created_at)}
                   </div>
                   <div
                     style={{
@@ -430,38 +385,18 @@ export default function Dashboard({
                       marginTop: 2,
                     }}
                   >
-                    {formatDate(s.captured_at ?? s.created_at)}
-                    {s.length_feet != null && ` · ${s.length_feet} ft`}
-                    {s.break_type && ` · ${breakTypeLabel(s.break_type)}`}
+                    {s.length_feet != null && `${s.length_feet} ft`}
+                    {s.break_type &&
+                      `${s.length_feet != null ? " · " : ""}${breakTypeLabel(s.break_type)}`}
                     {s.putter_id &&
                       putterNames.has(s.putter_id) &&
                       ` · ${putterNames.get(s.putter_id)}`}
                   </div>
                 </div>
                 <div style={{ textAlign: "right", flexShrink: 0 }}>
-                  {s.status === "done" ? (
-                    <>
-                      <div style={{ fontWeight: 600 }}>
-                        {s.putt_count} putt{s.putt_count === 1 ? "" : "s"}
-                      </div>
-                      {s.duration_s != null && (
-                        <div
-                          style={{
-                            fontSize: 12,
-                            color: "var(--color-neutral-600)",
-                          }}
-                        >
-                          {s.duration_s.toFixed(1)}s
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <span
-                      style={{ color: "var(--color-neutral-500)", fontSize: 18 }}
-                    >
-                      ›
-                    </span>
-                  )}
+                  <div style={{ fontWeight: 600 }}>
+                    {s.putt_count} putt{s.putt_count === 1 ? "" : "s"}
+                  </div>
                 </div>
               </button>
             ))}

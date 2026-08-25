@@ -1,32 +1,29 @@
 import Foundation
 
-/// One analyzed session, from `GET /api/sessions`. Only the fields the History
-/// tab renders are decoded; the backend scopes every row to the signed-in user.
-/// Mirrors the frontend `SessionRow` (sessions.ts) and `db.py`'s `_SESSION_COLS`.
+/// One gate session, from `GET /api/sessions`. Only the fields the History tab
+/// renders are decoded; the backend scopes every row to the signed-in user.
+/// Mirrors the frontend `SessionRow` (sessions.ts) and `db.py`'s `_SESSION_FIELDS`.
 struct SessionRow: Codable, Identifiable, Hashable {
     let id: String
     let createdAt: String
-    let capturedAt: String?
     let lengthFeet: Int?
     let breakType: String?
     let puttCount: Int
     let putterId: String?
-    let status: String
 
     enum CodingKeys: String, CodingKey {
-        case id, status
+        case id
         case createdAt = "created_at"
-        case capturedAt = "captured_at"
         case lengthFeet = "length_feet"
         case breakType = "break_type"
         case puttCount = "putt_count"
         case putterId = "putter_id"
     }
 
-    /// When the putts were struck — the capture time if the device sent one, else
-    /// when the row was created.
+    /// When the session was created — a gate session is created on its first
+    /// relayed putt.
     var timestamp: Date? {
-        SessionRow.parseDate(capturedAt) ?? SessionRow.parseDate(createdAt)
+        SessionRow.parseDate(createdAt)
     }
 
     /// Parses the backend's ISO-8601 timestamps (with or without fractional
@@ -49,8 +46,9 @@ struct SessionRow: Codable, Identifiable, Hashable {
 final class SessionHistoryStore: ObservableObject {
 
     @Published private(set) var sessions: [SessionRow] = []
-    /// Mean stored `offset_mm` across all done sessions. Positive = the golfer's
-    /// left (a pull); negative = the right (a push) — see `GatePutt.golferSide`.
+    /// Mean stored `offset_mm` across all sessions with putts. Positive = the
+    /// golfer's left (a pull); negative = the right (a push) — see
+    /// `GatePutt.golferSide`.
     @Published private(set) var meanOffsetMm: Double?
     @Published private(set) var isLoading = false
     @Published private(set) var loadError: String?
@@ -69,11 +67,11 @@ final class SessionHistoryStore: ObservableObject {
         do {
             let loaded = try await service.fetchSessions()
             sessions = loaded
-            let doneIds = loaded.filter { $0.status == "done" && $0.puttCount > 0 }.map(\.id)
-            if doneIds.isEmpty {
+            let ids = loaded.filter { $0.puttCount > 0 }.map(\.id)
+            if ids.isEmpty {
                 meanOffsetMm = nil
             } else {
-                let offsets = try await service.fetchOffsets(sessionIds: doneIds)
+                let offsets = try await service.fetchOffsets(sessionIds: ids)
                 meanOffsetMm = offsets.isEmpty ? nil : offsets.reduce(0, +) / Double(offsets.count)
             }
         } catch {

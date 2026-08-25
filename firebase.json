@@ -10,5 +10,14 @@
       },
       { "source": "**", "destination": "/index.html" }
     ]
+  },
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "emulators": {
+    "firestore": { "port": 8080 },
+    "ui": { "enabled": true },
+    "singleProjectMode": true
   }
 }

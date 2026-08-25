@@ -49,7 +49,7 @@ export default function ContributionGraph({
     // How many sessions fall on each local day.
     const counts = new Map<string, number>();
     for (const s of sessions) {
-      const d = new Date(s.captured_at ?? s.created_at);
+      const d = new Date(s.created_at);
       if (Number.isNaN(d.getTime())) continue;
       const key = dateKey(d);
       counts.set(key, (counts.get(key) ?? 0) + 1);

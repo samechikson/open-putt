@@ -1,14 +1,14 @@
 import Foundation
 
 /// One putt within a session, from `GET /api/sessions/{id}/putts`. Mirrors the
-/// web `PuttRow` (sessions.ts) and `db.py`'s `_PUTT_COLS`; only the fields the
+/// web `PuttRow` (sessions.ts) and `db.py`'s `_PUTT_FIELDS`; only the fields the
 /// iOS session-detail view renders are decoded.
 struct SessionPutt: Codable, Identifiable {
     let puttIndex: Int
     let offsetMm: Double?
     let speedMps: Double?
-    /// Per-sensor offsets from a hardware-gate putt (mm; null per sensor that
-    /// didn't see the ball, null entirely for video-pipeline putts).
+    /// Per-sensor offsets from the hardware gate (mm; null per sensor that
+    /// didn't see the ball).
     let sensorOffsetsMm: [Double?]?
 
     /// The putt_index is the stable per-session identity (a delete leaves a gap

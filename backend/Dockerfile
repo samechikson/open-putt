@@ -1,11 +1,5 @@
 FROM python:3.13-slim
 
-# System libraries OpenCV (headless) and video decoding need at runtime.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libglib2.0-0 \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000
@@ -20,7 +14,6 @@ COPY app ./app
 
 EXPOSE 8000
 
-# Single worker: video analysis is CPU-bound and memory-heavy, so scale with
-# Cloud Run instances rather than in-process workers. `application` mounts the
-# API under /api (see app/main.py).
+# Single worker; scale with Cloud Run instances rather than in-process workers.
+# `application` mounts the API under /api (see app/main.py).
 CMD ["sh", "-c", "uvicorn app.main:application --host 0.0.0.0 --port ${PORT}"]

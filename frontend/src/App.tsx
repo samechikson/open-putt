@@ -8,7 +8,6 @@ import {
 } from "react-router-dom";
 import "./App.css";
 import Dashboard from "./Dashboard";
-import AnalyzeView from "./AnalyzeView";
 import SessionDetail from "./SessionDetail";
 import Putters from "./PuttersPage";
 import Logo from "./Logo";
@@ -113,17 +112,7 @@ function App() {
             path="/"
             element={
               <Dashboard
-                onNewSession={() => navigate("/analyze")}
                 onOpenSession={(id) => navigate(`/sessions/${id}`)}
-              />
-            }
-          />
-          <Route
-            path="/analyze"
-            element={
-              <AnalyzeView
-                onBack={() => navigate("/")}
-                onSessionCreated={(id) => navigate(`/sessions/${id}`)}
               />
             }
           />

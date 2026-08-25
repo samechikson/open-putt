@@ -1,11 +1,9 @@
 #!/bin/bash
 set -e
 
-# Run the whole stack locally. The backend runs in LOCAL_MODE only for storage:
-# uploads go to a local directory and analysis runs in-process, so no GCS /
-# Cloud Tasks are needed. Auth and persistence behave exactly as deployed —
-# real Firebase ID-token verification, and the Postgres in backend/.env.
-export LOCAL_MODE=1
+# Run the whole stack locally. Persistence goes to a local Firestore emulator
+# (see below), and auth uses a fixed dev UID by default. Putts are ingested from
+# the hardware gate via the iOS app; the web frontend is a read/review surface.
 
 # Auth: verify real Firebase ID tokens, identical to production. This needs
 # Application Default Credentials — run `gcloud auth application-default login`
@@ -25,15 +23,26 @@ if [ -z "$AUTH_DEV_UID" ] && ! grep -qs '^AUTH_DEV_UID=' backend/.env backend/.e
   export AUTH_DEV_UID="local-dev"
 fi
 
-# Database: point at a Postgres to exercise persistence + the sessions/putters
-# endpoints. Precedence is shell DATABASE_URL, then backend/.env (loaded by the
-# app via load_dotenv), then a local Postgres fallback (createdb putting_gate &&
-# psql putting_gate -f backend/db/schema.sql). Only export the fallback when
-# neither source provides a URL — exporting it unconditionally would shadow the
-# one in backend/.env, since load_dotenv() does not override an already-set env
-# var, and the pool would then time out against a Postgres that isn't running.
-if [ -z "$DATABASE_URL" ] && ! grep -qs '^DATABASE_URL=' backend/.env backend/.env.local; then
-  export DATABASE_URL="postgresql://localhost/putting_gate"
+# Database: a local Firestore emulator, so persistence + the sessions/putters
+# endpoints work without touching the real Firestore. The backend picks it up via
+# FIRESTORE_EMULATOR_HOST (db.py routes all reads/writes to the emulator when it's
+# set). Needs the Firebase CLI (`npm i -g firebase-tools`) and a Java runtime.
+# GOOGLE_CLOUD_PROJECT gives both the emulator and the client a project id; the
+# value is arbitrary against the emulator.
+export GOOGLE_CLOUD_PROJECT="${GOOGLE_CLOUD_PROJECT:-${FIREBASE_PROJECT_ID:-putting-gate}}"
+FIRESTORE_EMULATOR_PID=""
+if [ -z "$FIRESTORE_EMULATOR_HOST" ]; then
+  if command -v firebase >/dev/null 2>&1; then
+    export FIRESTORE_EMULATOR_HOST="localhost:8080"
+    echo "Starting Firestore emulator on ${FIRESTORE_EMULATOR_HOST}..."
+    firebase emulators:start --only firestore --project "$GOOGLE_CLOUD_PROJECT" &
+    FIRESTORE_EMULATOR_PID=$!
+    # Give the emulator a moment to bind its port before the backend connects.
+    sleep 4
+  else
+    echo "WARNING: firebase CLI not found — persistence is disabled this run."
+    echo "  Install it with: npm i -g firebase-tools"
+  fi
 fi
 
 # Backend
@@ -56,5 +65,5 @@ echo "Backend: http://localhost:8000"
 echo "Frontend: http://localhost:5173"
 echo "Press Ctrl-C to stop both."
 
-trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null; wait $BACKEND_PID $FRONTEND_PID 2>/dev/null" INT TERM EXIT
+trap "kill $BACKEND_PID $FRONTEND_PID $FIRESTORE_EMULATOR_PID 2>/dev/null; wait $BACKEND_PID $FRONTEND_PID $FIRESTORE_EMULATOR_PID 2>/dev/null" INT TERM EXIT
 wait $BACKEND_PID $FRONTEND_PID

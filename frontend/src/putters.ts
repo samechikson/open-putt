@@ -1,7 +1,7 @@
 import { apiFetch, apiJson, detailFromResponse } from "./api";
 
 // A putter, as returned by the backend (which scopes every query to the
-// signed-in user). Mirror of backend/db/schema.sql.
+// signed-in user). Mirrors db.py's _PUTTER_FIELDS (see backend/db/README.md).
 export interface PutterRow {
   id: string;
   name: string;

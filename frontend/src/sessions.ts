@@ -1,29 +1,20 @@
 import { apiFetch, apiJson, detailFromResponse } from "./api";
 
-// Job lifecycle of a session's background analysis.
-export type SessionStatus = "queued" | "processing" | "done" | "error";
-
 // A session, as returned by the backend (which scopes every query to the
-// signed-in user, so the client never has to filter by user).
+// signed-in user, so the client never has to filter by user). Sessions are
+// gate-only: a hardware-gate session is created on its first relayed putt and
+// keeps gaining putts as the player putts. Mirrors db.py's _SESSION_FIELDS.
 export interface SessionRow {
   id: string;
   created_at: string;
-  captured_at: string | null;
-  file_name: string | null;
   length_feet: number | null;
   break_type: string | null;
   putt_count: number;
-  duration_s: number | null;
-  segments_detected: number | null;
-  status: SessionStatus;
-  error: string | null;
-  video_path: string | null;
   putter_id: string | null;
 }
 
-// The `putt_break` enum values with human labels, in menu order (mirror of
-// backend/db/schema.sql). Used for the session metadata editor
-// and for rendering a break type anywhere in the UI.
+// The `putt_break` enum values with human labels, in menu order. Used for the
+// session metadata editor and for rendering a break type anywhere in the UI.
 export const BREAK_TYPES: { value: string; label: string }[] = [
   { value: "straight", label: "Straight" },
   { value: "leftToRight", label: "Left to right" },
@@ -103,19 +94,7 @@ export async function updateSession(
   }
 }
 
-// Re-run analysis on a session's already-uploaded video, on demand. Resets the
-// session to 'queued' server-side and reprocesses the retained clip (no
-// re-upload); watch it via subscribeToSession for completion, as with an upload.
-export async function reanalyzeSession(sessionId: string): Promise<void> {
-  const res = await apiFetch(`/sessions/${sessionId}/reanalyze`, {
-    method: "POST",
-  });
-  if (!res.ok) {
-    throw new Error(await detailFromResponse(res, "Could not start re-analysis"));
-  }
-}
-
-// Delete a session and its putts + video via the backend.
+// Delete a session and its putts via the backend.
 export async function deleteSession(sessionId: string): Promise<void> {
   const res = await apiFetch(`/sessions/${sessionId}`, { method: "DELETE" });
   if (!res.ok) {
@@ -137,65 +116,6 @@ export async function deletePutt(
   }
 }
 
-// A short-lived signed URL to stream a session's retained video.
-export async function fetchSessionVideoUrl(sessionId: string): Promise<string> {
-  const { url } = await apiJson<{ url: string }>(
-    `/sessions/${sessionId}/video`,
-    {},
-    "Could not load video",
-  );
-  return url;
-}
-
-// Queue a Full Session video for background analysis. Uploads the video straight
-// to Cloud Storage via a signed URL (avoiding Cloud Run's request-size limit),
-// then starts analysis. Returns the session id; watch it via subscribeToSession
-// for completion. The owner is derived from the auth token (attached by
-// apiFetch), not sent in the body.
-export async function uploadSession(
-  file: File,
-  fps: number | null,
-): Promise<string> {
-  // 1. Ask the backend for a signed upload URL.
-  const initRes = await apiFetch("/uploads", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ filename: file.name }),
-  });
-  if (!initRes.ok) {
-    throw new Error(await detailFromResponse(initRes, "Could not start upload"));
-  }
-  const { session_id, object_name, upload_url } = (await initRes.json()) as {
-    session_id: string;
-    object_name: string;
-    upload_url: string;
-  };
-
-  // 2. Upload the video directly to Cloud Storage (the signed URL needs no app
-  //    auth, so this is a plain fetch, not apiFetch).
-  const putRes = await fetch(upload_url, { method: "PUT", body: file });
-  if (!putRes.ok) {
-    throw new Error(`Video upload failed (HTTP ${putRes.status})`);
-  }
-
-  // 3. Start background analysis of the uploaded object.
-  const startRes = await apiFetch("/analyze-session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      session_id,
-      object_name,
-      fps: fps ?? 0,
-      file_name: file.name,
-    }),
-  });
-  if (!startRes.ok) {
-    throw new Error(await detailFromResponse(startRes, "Could not start analysis"));
-  }
-  const body = (await startRes.json()) as { session_id: string };
-  return body.session_id;
-}
-
 export async function fetchSessions(): Promise<SessionRow[]> {
   return apiJson<SessionRow[]>("/sessions", {}, "Could not load sessions");
 }
@@ -207,20 +127,14 @@ export async function fetchSession(id: string): Promise<SessionRow | null> {
   return (await res.json()) as SessionRow;
 }
 
-// A row from the `putts` table (raw tracking arrays are not persisted).
+// One putt as returned by the backend. Mirrors db.py's _PUTT_FIELDS.
 export interface PuttRow {
   putt_index: number;
-  start_s: number | null;
-  end_s: number | null;
   offset_mm: number | null;
   direction: string | null;
   speed_mps: number | null;
-  track_count: number | null;
-  // Source-frame index where the ball crossed the gate (bottom laser). Null for
-  // putts analyzed before this was recorded — no crossing still is available.
-  crossing_frame: number | null;
   // Per-sensor offsets from the hardware gate (device mounting order; null per
-  // sensor that didn't see the ball). Null entirely for video-pipeline putts.
+  // sensor that didn't see the ball).
   sensor_offsets_mm: (number | null)[] | null;
 }
 
@@ -230,21 +144,6 @@ export async function fetchPutts(sessionId: string): Promise<PuttRow[]> {
     {},
     "Could not load putts",
   );
-}
-
-// Fetch the gate-crossing still for a putt as an object URL. The frame endpoint
-// needs the Bearer token (so a bare <img src> can't hit it directly); we fetch
-// the JPEG as a blob and wrap it in an object URL. Callers must revoke the URL
-// when done (URL.revokeObjectURL) to avoid leaks.
-export async function fetchPuttFrameUrl(
-  sessionId: string,
-  puttIndex: number,
-): Promise<string> {
-  const res = await apiFetch(`/sessions/${sessionId}/putts/${puttIndex}/frame`);
-  if (!res.ok) {
-    throw new Error(await detailFromResponse(res, "Could not load frame"));
-  }
-  return URL.createObjectURL(await res.blob());
 }
 
 // Pull every putt's offset_mm across several sessions in one request, for the

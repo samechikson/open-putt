@@ -1,0 +1,5 @@
+{
+  "comment": "No composite indexes required: backend/app/db.py filters on a single field per query and does all ordering / secondary filtering in Python (see its module docstring). Single-field indexes are created automatically by Firestore.",
+  "indexes": [],
+  "fieldOverrides": []
+}

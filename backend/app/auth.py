@@ -82,9 +82,9 @@ def require_device(x_device_token: Optional[str] = Header(default=None)) -> str:
     """Return the Firebase UID a hardware device's putts are attributed to.
 
     Embedded devices (the ESP32 putt gate) can't do a full Firebase sign-in, so
-    they authenticate with a single long-lived secret instead of an ID token —
-    the same shared-secret pattern `/process` uses. `DEVICE_INGEST_TOKEN` is the
-    secret (compared constant-time against the `X-Device-Token` header) and
+    they authenticate with a single long-lived shared secret instead of an ID
+    token. `DEVICE_INGEST_TOKEN` is the secret (compared constant-time against the
+    `X-Device-Token` header) and
     `DEVICE_INGEST_UID` is the owner all device sessions are attributed to.
     Single-tenant by design: one token → one user.
     """

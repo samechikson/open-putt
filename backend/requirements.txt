@@ -1,12 +1,8 @@
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
-python-multipart>=0.0.9
-opencv-contrib-python-headless>=4.9.0
-numpy>=1.26.0
 python-dotenv>=1.0.0
-google-cloud-storage>=2.16.0
-google-cloud-tasks>=2.16.0
-# Postgres persistence (Supabase, reached directly via its connection pooler
-# with a DATABASE_URL conninfo) + Firebase Auth ID-token verification.
-psycopg[binary,pool]>=3.2.0
+# Firestore persistence (Native mode, reached via the Admin/service-account
+# client) + Firebase Auth ID-token verification. firebase-admin pulls in
+# google-cloud-firestore, but pin it explicitly since db.py imports it directly.
+google-cloud-firestore>=2.16.0
 firebase-admin>=6.5.0
