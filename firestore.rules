@@ -1,15 +1,49 @@
 rules_version = '2';
 
-// The Putting Gate backend is the ONLY Firestore client: the browser, iOS app,
-// and hardware gate all go through the FastAPI service, which connects with the
-// Admin SDK (service-account credentials) and therefore bypasses these rules.
-// No client ever reaches Firestore directly, so deny all direct access. If a
-// direct-from-client path is ever added, replace this with per-collection rules
-// scoped by request.auth.uid == resource.data.user_id.
+// Access model:
+//   * The web app reads and writes Firestore **directly** via the Firebase Web
+//     SDK, so these rules are the enforcement boundary: a signed-in user may only
+//     touch documents whose `user_id` is their own uid.
+//   * The backend (hardware-gate ingest) uses the Admin SDK, which **bypasses
+//     these rules**. That's why sessions and putts can't be *created* by a client
+//     here — they're created by the backend on ingest; the web app only reads
+//     them, edits session metadata, or deletes them.
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if false;
+    function signedIn() {
+      return request.auth != null;
+    }
+    // The existing doc belongs to the caller.
+    function owns(res) {
+      return signedIn() && res.data.user_id == request.auth.uid;
+    }
+    // The incoming doc is owned by the caller (create/update can't set or move
+    // ownership to someone else).
+    function ownsIncoming() {
+      return signedIn() && request.resource.data.user_id == request.auth.uid;
+    }
+
+    // Putters: full CRUD by the owner (the web app manages these).
+    match /putters/{putterId} {
+      allow read, delete: if owns(resource);
+      allow create: if ownsIncoming();
+      allow update: if owns(resource) && ownsIncoming();
+    }
+
+    // Sessions: created by the backend on ingest (Admin SDK bypasses rules). The
+    // web app reads its own, edits metadata, or deletes — but can't create, and
+    // can't change ownership on an edit.
+    match /sessions/{sessionId} {
+      allow read, delete: if owns(resource);
+      allow update: if owns(resource) && ownsIncoming();
+      allow create: if false;
+    }
+
+    // Putts: created/updated by the backend on ingest. The web app reads its own
+    // and can delete a putt (e.g. a mishit / false trip).
+    match /putts/{puttId} {
+      allow read, delete: if owns(resource);
+      allow create, update: if false;
     }
   }
 }

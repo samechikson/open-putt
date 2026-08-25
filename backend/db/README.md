@@ -1,10 +1,17 @@
 # Firestore data model
 
-Persistence is **Firestore (Native mode)**. The backend (`backend/app/db.py`) is
-the only client — it connects with the Admin SDK (service-account credentials on
-Cloud Run; the Firestore **emulator** locally), which bypasses security rules, so
-ownership is enforced in application code by a `user_id` (the Firebase UID) on
-every document. `firestore.rules` therefore denies all *direct* client access.
+Persistence is **Firestore (Native mode)**, accessed two ways:
+
+- The **backend** (`backend/app/db.py`) connects with the Admin SDK
+  (service-account credentials on Cloud Run; the Firestore **emulator** locally),
+  which **bypasses** security rules. It's the ingest path (hardware-gate putts) and
+  iOS's read / session-metadata API. Ownership is enforced in application code by a
+  `user_id` (the Firebase UID) on every document.
+- The **web app** connects directly with the Firebase Web SDK, so `firestore.rules`
+  is its enforcement boundary: a signed-in user may only touch docs whose `user_id`
+  is their uid. Sessions and putts are *created* only by the backend on ingest (the
+  rules forbid clients creating them); the web only reads, edits session metadata,
+  and deletes.
 
 There is no schema/migration file: Firestore is schemaless, and this project
 migrated off Postgres (the old `supabase/migrations/` + `db/schema.sql` are gone;

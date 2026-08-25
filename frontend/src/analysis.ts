@@ -16,9 +16,3 @@ export function golferSide(offsetMm: number): Side {
 export function biasWord(side: Side): string {
   return side === "right" ? "push" : side === "left" ? "pull" : "none";
 }
-
-// Backend base URL. Same-origin `/api` by default: in production Firebase
-// Hosting rewrites /api/** to Cloud Run (no CORS); in dev the Vite server
-// proxies /api to the local backend (see vite.config.ts). Overridable via
-// VITE_API_BASE (see .env.production).
-export const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";

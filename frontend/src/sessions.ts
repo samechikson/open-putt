@@ -1,9 +1,21 @@
-import { apiFetch, apiJson, detailFromResponse } from "./api";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  updateDoc,
+  where,
+  writeBatch,
+  type DocumentData,
+} from "firebase/firestore";
+import { db, currentUid } from "./firebaseClient";
 
-// A session, as returned by the backend (which scopes every query to the
-// signed-in user, so the client never has to filter by user). Sessions are
-// gate-only: a hardware-gate session is created on its first relayed putt and
-// keeps gaining putts as the player putts. Mirrors db.py's _SESSION_FIELDS.
+// A session, stored in `sessions/{sessionId}` and scoped to the signed-in user
+// by its `user_id` field (enforced in firestore.rules). Sessions are gate-only:
+// created by the backend on the session's first relayed putt, then read/edited
+// here. `sessionId` is the iOS session UUID.
 export interface SessionRow {
   id: string;
   created_at: string;
@@ -12,6 +24,51 @@ export interface SessionRow {
   putt_count: number;
   putter_id: string | null;
 }
+
+// One putt, stored in `putts/{sessionId_index}` (a top-level collection).
+export interface PuttRow {
+  putt_index: number;
+  offset_mm: number | null;
+  direction: string | null;
+  speed_mps: number | null;
+  // Per-sensor offsets from the hardware gate (device mounting order; null per
+  // sensor that didn't see the ball).
+  sensor_offsets_mm: (number | null)[] | null;
+}
+
+// Render a Firestore Timestamp (or a raw string) as an ISO-8601 string, so
+// SessionRow.created_at stays a string the UI can pass to `new Date(...)`.
+function toIso(value: unknown): string {
+  if (value && typeof (value as { toDate?: unknown }).toDate === "function") {
+    return (value as { toDate: () => Date }).toDate().toISOString();
+  }
+  if (typeof value === "string") return value;
+  return new Date(0).toISOString();
+}
+
+function toSessionRow(id: string, data: DocumentData): SessionRow {
+  return {
+    id,
+    created_at: toIso(data.created_at),
+    length_feet: data.length_feet ?? null,
+    break_type: data.break_type ?? null,
+    putt_count: data.putt_count ?? 0,
+    putter_id: data.putter_id ?? null,
+  };
+}
+
+function toPuttRow(data: DocumentData): PuttRow {
+  return {
+    putt_index: data.putt_index,
+    offset_mm: data.offset_mm ?? null,
+    direction: data.direction ?? null,
+    speed_mps: data.speed_mps ?? null,
+    sensor_offsets_mm: data.sensor_offsets_mm ?? null,
+  };
+}
+
+const puttDocId = (sessionId: string, puttIndex: number) =>
+  `${sessionId}_${puttIndex}`;
 
 // The `putt_break` enum values with human labels, in menu order. Used for the
 // session metadata editor and for rendering a break type anywhere in the UI.
@@ -74,8 +131,64 @@ export function lengthBucketLabel(bucket: number): string {
   return `${lo}–${hi} ft`;
 }
 
-// Update a session's editable metadata (distance, break type, putter) via the
-// backend. Pass null to clear a field.
+// All of the user's sessions, newest first. Single equality filter (user_id) +
+// client-side sort keeps this index-free.
+export async function fetchSessions(): Promise<SessionRow[]> {
+  const uid = await currentUid();
+  const snap = await getDocs(
+    query(collection(db, "sessions"), where("user_id", "==", uid)),
+  );
+  const rows = snap.docs.map((d) => toSessionRow(d.id, d.data()));
+  rows.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  return rows;
+}
+
+export async function fetchSession(id: string): Promise<SessionRow | null> {
+  const uid = await currentUid();
+  const snap = await getDoc(doc(db, "sessions", id));
+  if (!snap.exists() || snap.data().user_id !== uid) return null;
+  return toSessionRow(snap.id, snap.data());
+}
+
+// A session's putts, ordered by putt_index. Scoped by user_id (which also
+// satisfies the security rule for the query).
+export async function fetchPutts(sessionId: string): Promise<PuttRow[]> {
+  const uid = await currentUid();
+  const snap = await getDocs(
+    query(
+      collection(db, "putts"),
+      where("user_id", "==", uid),
+      where("session_id", "==", sessionId),
+    ),
+  );
+  const rows = snap.docs.map((d) => toPuttRow(d.data()));
+  rows.sort((a, b) => a.putt_index - b.putt_index);
+  return rows;
+}
+
+// Every putt's offset_mm across the given sessions, for the dashboard summary.
+// One user-scoped query, filtered to the requested sessions client-side.
+export async function fetchOffsetsForSessions(
+  sessionIds: string[],
+): Promise<number[]> {
+  if (sessionIds.length === 0) return [];
+  const uid = await currentUid();
+  const wanted = new Set(sessionIds);
+  const snap = await getDocs(
+    query(collection(db, "putts"), where("user_id", "==", uid)),
+  );
+  const offsets: number[] = [];
+  for (const d of snap.docs) {
+    const data = d.data();
+    if (wanted.has(data.session_id) && data.offset_mm != null) {
+      offsets.push(data.offset_mm);
+    }
+  }
+  return offsets;
+}
+
+// Update a session's editable metadata (distance, break type, putter). Pass null
+// to clear a field. Ownership is enforced by the security rules.
 export async function updateSession(
   sessionId: string,
   metadata: {
@@ -84,79 +197,48 @@ export async function updateSession(
     putter_id: string | null;
   },
 ): Promise<void> {
-  const res = await apiFetch(`/sessions/${sessionId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(metadata),
+  await currentUid();
+  await updateDoc(doc(db, "sessions", sessionId), {
+    length_feet: metadata.length_feet,
+    break_type: metadata.break_type,
+    putter_id: metadata.putter_id,
   });
-  if (!res.ok) {
-    throw new Error(await detailFromResponse(res, "Could not update session"));
-  }
 }
 
-// Delete a session and its putts via the backend.
+// Delete a session and its putts. Firestore has no cascade, so delete the putts
+// (one user-scoped query) and the session in one batch.
 export async function deleteSession(sessionId: string): Promise<void> {
-  const res = await apiFetch(`/sessions/${sessionId}`, { method: "DELETE" });
-  if (!res.ok) {
-    throw new Error(await detailFromResponse(res, "Could not delete session"));
-  }
+  const uid = await currentUid();
+  const putts = await getDocs(
+    query(
+      collection(db, "putts"),
+      where("user_id", "==", uid),
+      where("session_id", "==", sessionId),
+    ),
+  );
+  const batch = writeBatch(db);
+  for (const p of putts.docs) batch.delete(p.ref);
+  batch.delete(doc(db, "sessions", sessionId));
+  await batch.commit();
 }
 
-// Delete a single putt from a session (by its putt_index). The backend keeps
-// the session's putt_count in sync; remaining putts keep their indices.
+// Delete one putt (by its putt_index) and keep the session's putt_count in sync.
+// Remaining putts keep their indices (a delete leaves a gap, not a renumber).
 export async function deletePutt(
   sessionId: string,
   puttIndex: number,
 ): Promise<void> {
-  const res = await apiFetch(`/sessions/${sessionId}/putts/${puttIndex}`, {
-    method: "DELETE",
+  const uid = await currentUid();
+  await deleteDoc(doc(db, "putts", puttDocId(sessionId, puttIndex)));
+  // Recount and update putt_count so the session card / list stay accurate.
+  const remaining = await getDocs(
+    query(
+      collection(db, "putts"),
+      where("user_id", "==", uid),
+      where("session_id", "==", sessionId),
+    ),
+  );
+  await updateDoc(doc(db, "sessions", sessionId), {
+    putt_count: remaining.size,
   });
-  if (!res.ok) {
-    throw new Error(await detailFromResponse(res, "Could not delete putt"));
-  }
-}
-
-export async function fetchSessions(): Promise<SessionRow[]> {
-  return apiJson<SessionRow[]>("/sessions", {}, "Could not load sessions");
-}
-
-export async function fetchSession(id: string): Promise<SessionRow | null> {
-  const res = await apiFetch(`/sessions/${id}`);
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(await detailFromResponse(res, "Could not load session"));
-  return (await res.json()) as SessionRow;
-}
-
-// One putt as returned by the backend. Mirrors db.py's _PUTT_FIELDS.
-export interface PuttRow {
-  putt_index: number;
-  offset_mm: number | null;
-  direction: string | null;
-  speed_mps: number | null;
-  // Per-sensor offsets from the hardware gate (device mounting order; null per
-  // sensor that didn't see the ball).
-  sensor_offsets_mm: (number | null)[] | null;
-}
-
-export async function fetchPutts(sessionId: string): Promise<PuttRow[]> {
-  return apiJson<PuttRow[]>(
-    `/sessions/${sessionId}/putts`,
-    {},
-    "Could not load putts",
-  );
-}
-
-// Pull every putt's offset_mm across several sessions in one request, for the
-// home-page analytics summary. Nulls (putts with no measured offset) are dropped
-// server-side.
-export async function fetchOffsetsForSessions(
-  sessionIds: string[],
-): Promise<number[]> {
-  if (sessionIds.length === 0) return [];
-  const { offsets } = await apiJson<{ offsets: number[] }>(
-    "/putts/offsets",
-    { method: "POST", body: JSON.stringify({ session_ids: sessionIds }) },
-    "Could not load analytics",
-  );
-  return offsets;
 }

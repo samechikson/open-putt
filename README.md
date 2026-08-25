@@ -20,42 +20,43 @@ putt lands in one shared data model (`sessions` → `putts`) surfaced in history
 
 | Path | What it is |
 |------|------------|
-| `backend/` | Python / FastAPI service. Ingests hardware-gate putts; the **sole database client** and auth broker. A thin CRUD API over Firestore, on Cloud Run. |
-| `frontend/` | React 19 + TypeScript + Vite + Tailwind v4 web app. Browse sessions/putts and stats, edit session metadata, manage putters. Served by Firebase Hosting. |
+| `backend/` | Python / FastAPI service. Ingests hardware-gate putts into Firestore (Admin SDK) and serves iOS's reads + session-metadata API. On Cloud Run. |
+| `frontend/` | React 19 + TypeScript + Vite + Tailwind v4 web app. Reads/writes Firestore **directly** via the Firebase Web SDK (no backend calls). Served by Firebase Hosting. |
 | `ios/` | SwiftUI app (`PuttingGate`). Connects to the hardware gate over BLE, relays putts to the backend, and shows history/settings. |
 | `microcontroller/` | ESP32 (Arduino C++) firmware for the physical laser gate + ToF sensors, and its bring-up sketches. |
 | `backend/db/README.md` | The Firestore collection model (data lives in Firestore Native mode). |
-| `firestore.rules` / `firestore.indexes.json` | Deny-all client access (backend-only DB); no composite indexes. |
+| `firestore.rules` / `firestore.indexes.json` | Per-user client access for the web app; no composite indexes. |
 | `docs/` | Operator runbooks (the Firestore + Firebase-auth migration runbooks). |
 | `start.sh` | One command to run the whole web stack locally (with the Firestore emulator). |
 
 ## Architecture
 
 ```
-Hardware gate (ESP32) ──BLE──→ iOS app ─┐
-                                        ├─→ Firebase Hosting /api/**
-Web app (browse/review) ────────────────┤   (rewrite, same-origin)  ──→ Cloud Run: FastAPI ──→ Firestore (Native)
-                                        └─ Firebase Auth
-                                           (ID-token verification)
+Hardware gate (ESP32) ──BLE──→ iOS app ──→ Cloud Run: FastAPI (Admin SDK) ──┐
+                                                                            ├─→ Firestore (Native)
+Web app ──(Firebase Web SDK, rules-scoped)──────────────────────────────────┘
+   └─ Firebase Auth (ID tokens)
 ```
 
 Key facts that shape everything:
 
-- **The backend is the only thing that touches the database.** Browser, iOS, and the
-  gate never talk to Firestore directly. Every read/write goes through a FastAPI
-  endpoint that verifies a Firebase ID token and scopes the query by `user_id` (the
-  Firebase UID) — every query filters `user_id == uid`. The backend uses the
-  Firestore Admin SDK (which bypasses security rules), so `firestore.rules` denies
-  all direct client access and ownership is enforced in application code.
-- **The API is mounted under `/api`.** Firebase Hosting rewrites `/api/**` to the
-  Cloud Run service, so the web app makes **same-origin** calls (no CORS in prod).
-  Every caller uses the `/api` prefix: web (`VITE_API_BASE=/api`) and iOS
-  (`AppSettings.backendBaseURL` ends in `/api`).
+- **Two clients touch Firestore, split by trust.** The **web app** reads/writes
+  Firestore directly via the Firebase Web SDK; `firestore.rules` is the enforcement
+  boundary — a signed-in user can only touch docs whose `user_id` is their uid. The
+  **backend** uses the Admin SDK (bypasses rules) for hardware-gate ingest and iOS's
+  read / session-metadata API. Sessions and putts are *created* only by the backend
+  on ingest (rules forbid clients creating them); the web only reads them, edits
+  session metadata, or deletes.
+- **Ownership is a `user_id` field on every doc.** The web's queries filter
+  `user_id == uid` (which also makes them rule-legal); the backend filters the same
+  in code. Get it wrong and data leaks.
+- **The backend API is under `/api`.** iOS calls the Cloud Run URL directly
+  (`AppSettings.backendBaseURL` ends in `/api`); Firebase Hosting also rewrites
+  `/api/**` to Cloud Run, but the web app no longer uses the backend.
 - **Hardware-gate putts are the only putt source.** They arrive already-measured over
-  BLE and are persisted directly via `POST /api/device/putts` — no video, no analysis
-  pass, no async job. A session is created (already complete) on its first putt and
-  keeps gaining putts as the player putts; clients poll `GET /api/sessions/{id}/putts`
-  while a session is recent to pick up new ones.
+  BLE and are persisted via `POST /api/device/putts` — no video, no analysis pass, no
+  async job. A session is created (already complete) on its first putt and gains putts
+  as the player putts.
 - **No video, no heavy infra.** There is no Cloud Storage, no Cloud Tasks, no OpenCV,
   no signed URLs — the backend is a thin CRUD layer over Firestore.
 
@@ -78,7 +79,7 @@ FastAPI service. Routes are defined on an inner app and mounted at `/api` on the
 | File | Responsibility |
 |------|----------------|
 | `main.py` | FastAPI app: the `POST /device/putts` gate ingest, session/putt reads, session-metadata edit + delete, and putters CRUD. Mounts the API under `/api`. A thin CRUD layer — no analysis. |
-| `db.py` | The **only** Firestore client (Admin SDK; lazy, fail-soft). All ownership-scoped queries; single-field filters + Python-side ordering (no composite indexes). Field lists (`_SESSION_FIELDS`, etc.) stay in sync with the frontend TS types. See `backend/db/README.md`. |
+| `db.py` | The backend's Firestore client (Admin SDK; bypasses rules; lazy, fail-soft). Ingest + iOS's ownership-scoped reads/writes; single-field filters + Python-side ordering (no composite indexes). Field lists (`_SESSION_FIELDS`, etc.) stay in sync with the frontend TS types. See `backend/db/README.md`. |
 | `auth.py` | `require_user` / `require_device` / `require_user_or_device` dependencies → the Firebase UID. In local dev `AUTH_DEV_UID` short-circuits verification. |
 
 **Conventions:** blocking Firestore calls run in a threadpool via `run_in_threadpool`;
@@ -95,18 +96,21 @@ the signed-in user *or* the legacy device token), `GET /sessions`, `GET /session
 ## Frontend (`frontend/src/`)
 
 React 19, TypeScript, Vite, Tailwind v4 (`@tailwindcss/vite`), Oxlint. Routing is
-`react-router` in `App.tsx` (`/` dashboard, `/sessions/:id`, `/putters`). It's a
-read/review surface — sessions and putts come from the gate, not the web app.
+`react-router` in `App.tsx` (`/` dashboard, `/sessions/:id`, `/putters`). It reads and
+writes its own data **directly in Firestore via the Firebase Web SDK** — no backend
+API calls (it never creates sessions/putts, only reads/edits/deletes them and does the
+full putter CRUD).
 
-- `api.ts` — `apiFetch` / `apiJson` wrappers that attach the Firebase ID token as a
-  `Bearer` header. **All backend access goes through here.**
-- `analysis.ts` — `API_BASE` (default `/api`) and the golfer-perspective offset/side
-  helpers (`golferSide`, `biasWord`). `golferSide` negates the stored `offset_mm`, which
-  is pre-inverted on ingest, to recover the golfer's left/right.
-- `firebaseClient.ts` — Firebase app + `auth`; config from build-time `VITE_FIREBASE_*`
+- `firebaseClient.ts` — Firebase app, `auth`, `db` (Firestore), and `currentUid()`
+  (the signed-in uid that scopes every query); config from build-time `VITE_FIREBASE_*`
   env (public, safe in the bundle).
+- `sessions.ts` / `putters.ts` — the Firestore data layer (Web SDK reads/writes),
+  single-equality-filter queries + client-side sort (index-free, rule-legal), field
+  shapes mirroring `db.py`. Deletes cascade here (`deleteSession` removes its putts).
+- `analysis.ts` — the golfer-perspective offset/side helpers (`golferSide`, `biasWord`).
+  `golferSide` negates the stored `offset_mm` (pre-inverted on ingest) to recover the
+  golfer's left/right.
 - `AuthContext.tsx` / `Login.tsx` — email/password auth.
-- `sessions.ts` / `putters.ts` — typed client calls and field lists mirroring `db.py`.
 - `Dashboard.tsx`, `SessionDetail.tsx`, `PuttersPage.tsx`, `ContributionGraph.tsx`,
   `stats.ts` — views and building blocks.
 
@@ -157,16 +161,19 @@ gotchas.
 ## Database
 
 **Firestore (Native mode)** — schemaless; the collection model is documented in
-[`backend/db/README.md`](backend/db/README.md).
+[`backend/db/README.md`](backend/db/README.md). Accessed by the **web app** directly
+(Firebase Web SDK, scoped by `firestore.rules`) and the **backend** (Admin SDK, bypasses
+rules) for ingest + iOS.
 
 - **Collections:** `putters/{uuid}` (user-owned clubs, ≤1 active per user), `sessions/{sessionId}`
   (one doc per gate session; `sessionId` = the iOS session UUID; fields `length_feet`,
   `break_type`, `putter_id`, `putt_count`), and a top-level `putts/{sessionId_index}`
   (one doc per putt, id `"{session_id}_{putt_index}"`, denormalizing `session_id` +
-  `user_id`; deletes cascade in `db.py`). Putts carry `offset_mm`, `direction`,
+  `user_id`; deletes cascade in code). Putts carry `offset_mm`, `direction`,
   `speed_mps`, and `sensor_offsets_mm` (per-sensor readings).
-- Enum-like values (`break_type`, `direction`) are plain strings, validated in
-  `main.py`. Every query filters one field, so no composite indexes are needed.
+- Sessions/putts are created only by the backend on ingest (rules forbid clients
+  creating them); the web reads/edits/deletes. Every query filters a single field, so
+  no composite indexes are needed.
 
 **If you change a returned field set, update it in all three places:** `db.py`'s
 `_*_FIELDS`, `backend/db/README.md`, and the frontend TS types (`sessions.ts` /
@@ -241,6 +248,9 @@ arduino-cli monitor -p /dev/cu.usbserial-0001 -c baudrate=115200
   `frontend/**`, `firebase.json`, or the workflow
   (`.github/workflows/deploy-frontend.yml`). Vite bakes the `VITE_*` env into the bundle
   at build time.
+- **Firestore rules/indexes** are *not* in that workflow (hosting only). The web app
+  depends on `firestore.rules`, so deploy them after any change:
+  `firebase deploy --only firestore:rules,firestore:indexes`.
 - **Backend** deploys to Cloud Run via `bash backend/deploy/cloud-run.sh` (provisioning;
   `--fast` for a code-only rebuild+redeploy). Container is `backend/Dockerfile`
   (Python 3.13-slim; single uvicorn worker — scale via Cloud Run instances). It also
