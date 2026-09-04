@@ -28,7 +28,7 @@ a Raspberry Pi, then migrated to an ESP32 for portability.
 | **ELEGOO ESP32 DevKit** (ESP32-WROOM-32, USB-C, CP2102)    | Classic dual-core, WiFi + BT/BLE 4.2. 2.4 GHz WiFi only.            |
 | **3× Adafruit VL53L4CD** ToF distance sensors (~1–1300 mm) | All share I2C address `0x29`.                                       |
 | **Adafruit PCA9548** I2C multiplexer (TCA9548A-compatible) | Address `0x70`. Isolates the 3 identical sensors — one per channel. |
-| **5 mW laser module** (red +, black −, 3–5 V)              | Driven directly from a GPIO.                                        |
+| **Green laser module** (520 nm, 3–5 V)                     | Driven directly from a GPIO. Red + / black − leads.                 |
 | STEMMA QT / Qwiic cabling + jumpers, Wago 221 connectors   |                                                                     |
 | 10,000 mAh USB power bank                                  | Field power via USB-C.                                              |
 
