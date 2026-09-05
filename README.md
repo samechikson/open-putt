@@ -1,18 +1,15 @@
 # Putting Gate
 
-A golf putting-analysis app. A player rolls a putt through a physical **laser gate**
-and the system measures how far **off-center** the ball crossed — reporting a
-**push/pull** bias (in millimeters) plus the ball's **speed**. Over time it builds a
-history of sessions and putts so a player can see their tendencies per putter, break,
+A golf putting-analysis tool. A player rolls a putt through a physical 3d printed gate
+and the system measures how far **off-center** the ball crossed in millimeters as well as the ball's **speed**. 
+Over time it builds a history of sessions and putts so a player can see their tendencies per putter, break,
 and distance.
 
-**Putts are measured entirely by the hardware gate.** A 3D-printed "bridge" gate with
+The project includes a 3D-printed "bridge" with
 a laser and three time-of-flight distance sensors, driven by an ESP32, detects each
-pass and computes the offset on-device, then sends it over **Bluetooth (BLE)** to the
+pass and computes the offset on-device, then sends it over **Bluetooth (BLE)** to an
 iOS app, which writes it **directly to Firestore** via the Firebase iOS SDK under the
-signed-in user. There's no video / computer-vision path — an earlier OpenCV video-upload
-pipeline was removed (see [`docs/migration-firestore.md`](docs/migration-firestore.md)). Each
-putt lands in one shared data model (`sessions` → `putts`) surfaced in history and stats.
+signed-in user.
 
 ---
 
@@ -20,71 +17,16 @@ putt lands in one shared data model (`sessions` → `putts`) surfaced in history
 
 | Path | What it is |
 |------|------------|
-| `backend/` | Python / FastAPI service on Cloud Run. Now only the legacy ESP32 direct-post ingest path (`POST /api/device/putts`, Admin SDK); the web and iOS apps no longer call it. |
-| `frontend/` | React 19 + TypeScript + Vite + Tailwind v4 web app. Reads/writes Firestore **directly** via the Firebase Web SDK (no backend calls). Served by Firebase Hosting. |
-| `ios/` | SwiftUI app (`PuttingGate`). Connects to the hardware gate over BLE and writes each putt **directly to Firestore** via the Firebase iOS SDK; shows history/settings. |
 | `microcontroller/` | ESP32 (Arduino C++) firmware for the physical laser gate + ToF sensors, and its bring-up sketches. |
+| `ios/` | SwiftUI app (`PuttingGate`). Connects to the hardware gate over BLE and writes each putt **directly to Firestore** via the Firebase iOS SDK; shows history/settings. |
+| `frontend/` | React 19 + TypeScript + Vite + Tailwind v4 web app for showing history of putting sessions. Reads/writes Firestore **directly** via the Firebase Web SDK (no backend calls). Served by Firebase Hosting. |
+| `backend/` (optional) | Python / FastAPI service on Google Cloud Run. Now only the legacy ESP32 direct-post ingest path (`POST /api/device/putts`, Admin SDK). |
 | `backend/db/README.md` | The Firestore collection model (data lives in Firestore Native mode). |
 | `firestore.rules` / `firestore.indexes.json` | Per-user client access for the web + iOS apps; no composite indexes. |
 | `docs/` | Operator runbooks (the Firestore + Firebase-auth migration runbooks). |
 | `start.sh` | One command to run the whole web stack locally (with the Firestore emulator). |
 
-## Architecture
-
-```
-Hardware gate (ESP32) ─BLE→ iOS app ──(Firebase iOS SDK)──┐
-Web app ──────────────────(Firebase Web SDK)──────────────┼─→ Firestore (Native)
-   └─ Firebase Auth (ID tokens)                            │   ▲ firestore.rules
-ESP32 (legacy direct post) → Cloud Run: FastAPI (Admin SDK)┘   (Admin bypasses rules)
-```
-
-Key facts that shape everything:
-
-- **The apps talk to Firestore directly.** Both the **web app** (Firebase Web SDK)
-  and the **iOS app** (`FirebaseFirestore`) read/write Firestore directly, so
-  `firestore.rules` is the enforcement boundary — a signed-in user can only touch
-  docs whose `user_id` is their uid (and may create their own). The **backend**
-  (Admin SDK, bypasses rules) is now only the legacy ESP32 direct-post ingest path.
-- **Ownership is a `user_id` field on every doc.** Clients filter every query by
-  `user_id == uid` (which also makes them rule-legal). Get it wrong and data leaks.
-- **iOS is the primary ingest path.** It relays each hardware-gate putt over BLE and
-  writes it straight to Firestore — creating the session (already complete) on its
-  first putt and keeping `putt_count` in sync. No video, no analysis pass.
-- **No video, no heavy infra.** There is no Cloud Storage, no Cloud Tasks, no OpenCV,
-  no signed URLs — the backend is a thin CRUD layer over Firestore.
-
-### Migration history (important context)
-
-This project first **migrated off Supabase Auth/PostgREST/RLS to Firebase Auth**
-(keeping the DB on Postgres), then **migrated persistence off Postgres to
-Firestore** (Native mode) — the current state. The old Supabase/Postgres pieces
-(`psycopg`, `DATABASE_URL`, migrations, `db/schema.sql`) are gone; test data was
-not migrated. See [`docs/migration-firestore.md`](docs/migration-firestore.md) and
-the earlier [`docs/migration-firebase-auth.md`](docs/migration-firebase-auth.md).
-
 ---
-
-## Backend (`backend/app/`)
-
-FastAPI service. Routes are defined on an inner app and mounted at `/api` on the served
-`application`.
-
-| File | Responsibility |
-|------|----------------|
-| `main.py` | FastAPI app: the `POST /device/putts` gate ingest, session/putt reads, session-metadata edit + delete, and putters CRUD. Mounts the API under `/api`. A thin CRUD layer — no analysis. |
-| `db.py` | The backend's Firestore client (Admin SDK; bypasses rules; lazy, fail-soft). Now exercised only by the ESP32 direct-post path; single-field filters + Python-side ordering (no composite indexes). Field lists (`_SESSION_FIELDS`, etc.) stay in sync with the TS/Swift models. See `backend/db/README.md`. |
-| `auth.py` | `require_user` / `require_device` / `require_user_or_device` dependencies → the Firebase UID. In local dev `AUTH_DEV_UID` short-circuits verification. |
-
-**Conventions:** blocking Firestore calls run in a threadpool via `run_in_threadpool`;
-persistence is fail-soft (no Firestore configured → no-op so the app still runs);
-clients are lazy/optional so modules import cleanly with no config; ingest is idempotent
-by `(session_id, putt_index)` — the putt's Firestore doc id is `"{session_id}_{putt_index}"`,
-so the gate can safely retry.
-
-The read / metadata / putter endpoints still exist under `/api`, but **no client
-calls them any more** (both apps use the Firebase SDK directly). The only live
-endpoint is `POST /device/putts` — the legacy ESP32 direct-post ingest (shared
-`X-Device-Token`).
 
 ## Frontend (`frontend/src/`)
 
@@ -173,6 +115,27 @@ bypasses rules) writes only via the legacy ESP32 direct-post path.
 `_*_FIELDS`, `backend/db/README.md`, and the frontend TS types (`sessions.ts` /
 `putters.ts` / `analysis.ts`) — and sometimes iOS.
 
+## Backend (`backend/app/`) - DEPRECATED
+
+FastAPI service. Routes are defined on an inner app and mounted at `/api` on the served
+`application`.
+
+| File | Responsibility |
+|------|----------------|
+| `main.py` | FastAPI app: the `POST /device/putts` gate ingest, session/putt reads, session-metadata edit + delete, and putters CRUD. Mounts the API under `/api`. A thin CRUD layer — no analysis. |
+| `db.py` | The backend's Firestore client (Admin SDK; bypasses rules; lazy, fail-soft). Now exercised only by the ESP32 direct-post path; single-field filters + Python-side ordering (no composite indexes). Field lists (`_SESSION_FIELDS`, etc.) stay in sync with the TS/Swift models. See `backend/db/README.md`. |
+| `auth.py` | `require_user` / `require_device` / `require_user_or_device` dependencies → the Firebase UID. In local dev `AUTH_DEV_UID` short-circuits verification. |
+
+**Conventions:** blocking Firestore calls run in a threadpool via `run_in_threadpool`;
+persistence is fail-soft (no Firestore configured → no-op so the app still runs);
+clients are lazy/optional so modules import cleanly with no config; ingest is idempotent
+by `(session_id, putt_index)` — the putt's Firestore doc id is `"{session_id}_{putt_index}"`,
+so the gate can safely retry.
+
+The read / metadata / putter endpoints still exist under `/api`, but **no client
+calls them any more** (both apps use the Firebase SDK directly). The only live
+endpoint is `POST /device/putts` — the legacy ESP32 direct-post ingest (shared
+`X-Device-Token`).
 ---
 
 ## Development
