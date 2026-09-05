@@ -16,6 +16,16 @@ build/
 .env
 .env.*
 
+# Per-developer Firebase / cloud config (generate your own — see SETUP.md).
+# The committed *.example files are the templates; your real config stays local.
+ios/PuttingGate/GoogleService-Info.plist
+!ios/PuttingGate/GoogleService-Info.plist.example
+.firebaserc
+# Service-account key files (never commit; back the deploy with ADC instead).
+*serviceAccount*.json
+*service-account*.json
+service-account-key.json
+
 # Logs
 *.log
 npm-debug.log*

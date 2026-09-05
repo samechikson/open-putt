@@ -1,9 +1,20 @@
 name: Deploy frontend to Firebase Hosting
 
-# Auto-deploys the frontend to Firebase Hosting (project/site "putting-gate")
-# on every push to main that touches the frontend, the hosting config, or this
-# workflow. The actual build is firebase.json's `predeploy` hook
-# (`npm --prefix frontend run build`); `npm ci` below installs the deps it needs.
+# Auto-deploys the frontend to Firebase Hosting on every push to main that
+# touches the frontend, the hosting config, or this workflow. The actual build
+# is firebase.json's `predeploy` hook (`npm --prefix frontend run build`);
+# `npm ci` below installs the deps it needs.
+#
+# This workflow is fork-friendly — nothing is hard-coded to a specific Firebase
+# project. To enable it in your fork, set these in Settings → Secrets and
+# variables → Actions (see SETUP.md):
+#   Variables: VITE_FIREBASE_API_KEY, VITE_FIREBASE_AUTH_DOMAIN,
+#              VITE_FIREBASE_PROJECT_ID, VITE_FIREBASE_APP_ID,
+#              VITE_FIREBASE_STORAGE_BUCKET, VITE_FIREBASE_MESSAGING_SENDER_ID
+#   Secret:    FIREBASE_SERVICE_ACCOUNT (a service-account key JSON with
+#              Firebase Hosting deploy permission)
+# The deploy job is skipped automatically until VITE_FIREBASE_PROJECT_ID is set,
+# so forks that haven't configured hosting won't see failing runs.
 on:
   push:
     branches: [main]
@@ -24,6 +35,9 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # Skip cleanly in forks that haven't configured Firebase Hosting yet. Deploy
+    # only runs once the project id (and the rest of the config) is set.
+    if: ${{ vars.VITE_FIREBASE_PROJECT_ID != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -54,5 +68,8 @@ jobs:
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          projectId: putting-gate
+          # The Firebase project to deploy to. Reuses the same value the app is
+          # built against (VITE_FIREBASE_PROJECT_ID) so there's one fewer thing
+          # to configure. Set it as a repo variable in your fork.
+          projectId: ${{ vars.VITE_FIREBASE_PROJECT_ID }}
           channelId: live
