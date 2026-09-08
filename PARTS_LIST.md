@@ -43,6 +43,6 @@ Pin notes: avoid input-only **GPIO34–39** for outputs, and avoid strapping pin
 
 ## 3D Printing
 
-- A filament 3D printer with a least 200x200x200mm in printable surface area
+- A filament 3D printer with at least 210x210x200mm in printable surface area
 - PLA/PETG filament
 - 3mm and 4mm heat thread inserts
