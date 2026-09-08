@@ -1,15 +1,7 @@
 # Putting Gate
 
-A golf putting-analysis tool. A player rolls a putt through a physical 3d printed gate
-and the system measures how far **off-center** the ball crossed in millimeters as well as the ball's **speed**. 
-Over time it builds a history of sessions and putts so a player can see their tendencies per putter, break,
-and distance.
-
-The project includes a 3D-printed "bridge" with
-a laser and three time-of-flight distance sensors, driven by an ESP32, detects each
-pass and computes the offset on-device, then sends it over **Bluetooth (BLE)** to an
-iOS app, which writes it **directly to Firestore** via the Firebase iOS SDK under the
-signed-in user.
+This repo has the code and instructions to build a golf putting-analysis tool to measure a player's putting accuracy and speed.
+The project includes a 3D-printed "gate" that integrates a laser line with 3 time-of-flight sensors.
 
 ---
 
