@@ -80,6 +80,20 @@ multiplexer, since they share address `0x29`) measure the ball's lateral positio
 passes. The device computes a per-sensor **push/pull offset** against a jig-measured
 center calibration, plus speed from the sensor spacing.
 
+**Mux → ESP32 wiring.** The PCA9548 connects to the ESP32 over a 4-wire STEMMA QT /
+Qwiic cable, using the standard Qwiic wire colors:
+
+| Mux wire (STEMMA QT) | Signal      | ESP32 pin  |
+| -------------------- | ----------- | ---------- |
+| Red                  | VIN (3.3 V) | **3V3**    |
+| Black                | GND         | **GND**    |
+| Blue                 | SDA         | **GPIO21** |
+| Yellow               | SCL         | **GPIO22** |
+
+(The green laser is wired separately: red + → **GPIO26**, black − → **GND**.) The
+three sensors then hang off the mux on channels 0, 7, 4 (Sensor 1, 2, 3). Full wiring,
+pin rules, and geometry are in [`microcontroller/README.md`](microcontroller/README.md).
+
 Because the ESP32 has no WiFi in the field, it advertises over **BLE as `PuttingGate`**
 and sends each finalized putt as a JSON notification; the iOS app receives it and
 relays it to `POST /api/device/putts` under the signed-in user. The BLE service/
@@ -217,6 +231,18 @@ arduino-cli monitor -p /dev/cu.usbserial-0001 -c baudrate=115200
   uses the runtime SA.
 
 > `main` auto-deploys the frontend — be deliberate about what lands there.
+
+---
+
+## Running your own
+
+Everything is scoped to a Firebase project **you** create — there's no shared
+backend. See [`SETUP.md`](SETUP.md) for the full clone-to-run guide (Firebase
+project, web app, iOS build, hardware, and the optional backend).
+
+## License
+
+Released under the [MIT License](LICENSE).
 
 ---
 

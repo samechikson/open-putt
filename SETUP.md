@@ -182,15 +182,22 @@ You only need this if you want an ESP32 that posts putts **directly** over WiFi
 (bypassing the phone), or you otherwise want the FastAPI ingest service. The
 reference setup does **not** use it.
 
-The deploy script [`backend/deploy/cloud-run.sh`](backend/deploy/cloud-run.sh)
-**hard-codes the original author's project name, region, and service names** at the
-top (`PROJECT`, `REGION`, `REPO`, `SERVICE`, `CORS_ORIGIN`). Edit that config block
-to your own values before running:
+The deploy script [`backend/deploy/cloud-run.sh`](backend/deploy/cloud-run.sh) is
+parameterized by environment variables — you don't edit the file. Only `PROJECT`
+(your Google Cloud project id) is required; `REGION`, `AR_REPO`, `SERVICE`,
+`SA_NAME`, and `CORS_ORIGIN` have sensible defaults (`CORS_ORIGIN` defaults to your
+project's Firebase Hosting domain, `https://<PROJECT>.web.app`):
 
 ```bash
-# after `gcloud auth login` and setting a billing-enabled project
-bash backend/deploy/cloud-run.sh
+# after `gcloud auth login`, against a billing-enabled project
+PROJECT=my-gcp-project bash backend/deploy/cloud-run.sh
+# override a default if you need to:
+PROJECT=my-gcp-project REGION=europe-west1 bash backend/deploy/cloud-run.sh
 ```
+
+Before running, put `DEVICE_INGEST_TOKEN` and `DEVICE_INGEST_UID` in `backend/.env`
+(the script seeds them into Secret Manager). Use `--fast` for a code-only
+rebuild+redeploy.
 
 The service authenticates the ESP32 with a shared token you set as secrets
 (`DEVICE_INGEST_TOKEN` / `DEVICE_INGEST_UID`). The runtime service account gets

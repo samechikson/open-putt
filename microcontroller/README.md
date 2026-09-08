@@ -37,14 +37,17 @@ roll direction.
 
 ### ESP32 wiring
 
-| From            | To (ESP32) |
-| --------------- | ---------- |
-| Laser red (+)   | **GPIO26** |
-| Laser black (−) | **GND**    |
-| Mux SDA         | **GPIO21** |
-| Mux SCL         | **GPIO22** |
-| Mux VIN         | **3V3**    |
-| Mux GND         | **GND**    |
+The PCA9548 mux connects to the ESP32 over a 4-wire STEMMA QT / Qwiic cable, using the
+standard Qwiic wire colors:
+
+| Mux wire (STEMMA QT) | Signal      | ESP32 pin  |
+| -------------------- | ----------- | ---------- |
+| Red                  | VIN (3.3 V) | **3V3**    |
+| Black                | GND         | **GND**    |
+| Blue                 | SDA         | **GPIO21** |
+| Yellow               | SCL         | **GPIO22** |
+
+The green laser is wired separately: red + → **GPIO26**, black − → **GND**.
 
 Pin rules learned: avoid input-only **GPIO34–39** for outputs, and avoid strapping
 pins (0, 2, 5, 12, 15) for buttons.

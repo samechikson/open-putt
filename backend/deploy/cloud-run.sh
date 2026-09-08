@@ -4,13 +4,17 @@
 # re-running create steps may error if the resource exists — that's fine, skip
 # and continue.
 #
-#   bash backend/deploy/cloud-run.sh
+#   PROJECT=my-gcp-project bash backend/deploy/cloud-run.sh
 #
 # Requires: gcloud CLI and a billing-enabled project. Persistence is Firestore
 # (Native mode), reached by the runtime service account via the Admin SDK — no
 # connection string or DB secret needed. The backend ingests hardware-gate putts
 # relayed by the iOS app; there's no video pipeline (so no Cloud Storage or Cloud
 # Tasks).
+#
+# NOTE: The backend is OPTIONAL — it's only needed for an ESP32 that posts putts
+# directly over WiFi. The reference hardware uses BLE to the phone and never
+# touches this service. See SETUP.md before deploying it.
 set -euo pipefail
 
 # Run from the repo root regardless of where the script is invoked, so the
@@ -18,17 +22,36 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/../.."
 
-# ---- Config (edit as needed) ------------------------------------------------
-PROJECT="putting-gate"
-REGION="us-central1"
-REPO="putting-gate"                       # Artifact Registry repo
-SERVICE="putting-gate-backend"            # Cloud Run service
-SA_NAME="putting-gate-run"
+# ---- Config -----------------------------------------------------------------
+# Everything is overridable via environment variables so you can deploy to your
+# own Google Cloud project without editing this file. Only PROJECT is required;
+# the rest have sensible defaults.
+#
+#   PROJECT=my-gcp-project bash backend/deploy/cloud-run.sh
+#   PROJECT=my-gcp-project REGION=europe-west1 bash backend/deploy/cloud-run.sh
+#
+PROJECT="${PROJECT:-}"
+if [[ -z "$PROJECT" ]]; then
+  cat >&2 <<'EOF'
+ERROR: set PROJECT to your Google Cloud project id, e.g.
+
+    PROJECT=my-gcp-project bash backend/deploy/cloud-run.sh
+
+Optional overrides (with defaults): REGION=us-central1, AR_REPO=putting-gate,
+SERVICE=putting-gate-backend, SA_NAME=putting-gate-run,
+CORS_ORIGIN=https://<PROJECT>.web.app
+EOF
+  exit 1
+fi
+REGION="${REGION:-us-central1}"
+REPO="${AR_REPO:-putting-gate}"           # Artifact Registry repo
+SERVICE="${SERVICE:-putting-gate-backend}"  # Cloud Run service
+SA_NAME="${SA_NAME:-putting-gate-run}"
 SA_EMAIL="${SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
 # Frontend origin, used for the backend's CORS_ALLOW_ORIGINS secret. The web app
 # is served from Firebase Hosting, which also proxies /api to this service (so
-# API calls are same-origin).
-CORS_ORIGIN="https://putting-gate.web.app"
+# API calls are same-origin). Defaults to the project's Firebase Hosting domain.
+CORS_ORIGIN="${CORS_ORIGIN:-https://${PROJECT}.web.app}"
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/${SERVICE}"
 
 gcloud config set project "$PROJECT"
