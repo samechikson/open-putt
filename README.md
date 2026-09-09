@@ -1,7 +1,6 @@
 # Putting Gate
 
-This repo has the code and instructions to build a golf putting-analysis tool to measure a player's putting accuracy and speed.
-The project includes a 3D-printed "gate" that integrates a laser line with 3 time-of-flight sensors.
+This repo has the code and instructions to build a 3D printed golf putting-analysis tool to measure a player's putting accuracy and speed.
 
 ---
 
