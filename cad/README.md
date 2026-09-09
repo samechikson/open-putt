@@ -2,7 +2,9 @@
 
 **DISCLAIMER**: These files are a work in progress and may change at any time.
 
-<img width="800" src="./model.png" alt="Rendered CAD model of the assembled Putting Gate enclosure" />
+<img width="260" src="./model-1.png" alt="Rendered CAD model of the Putting Gate enclosure" />
+<img width="260" src="./model-2.png" alt="Rendered CAD model of the Putting Gate enclosure" />
+<img width="260" src="./model-3.png" alt="Rendered CAD model of the Putting Gate enclosure" />
 
 CAD for the **Putting Gate** enclosure — the 3D-printed "bridge" a golf ball rolls
 through. The models live in Onshape (link below); export and print the parts to
