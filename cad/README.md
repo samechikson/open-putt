@@ -4,10 +4,10 @@
 
 <img width="800" src="./model.png" alt="Rendered CAD model of the assembled Putting Gate enclosure" />
 
-Source CAD and printable models for the **Putting Gate** enclosure — the
-3D-printed "bridge" a golf ball rolls through. Print these to build your own gate;
-the electronics that mount inside are in [`PARTS_LIST.md`](../PARTS_LIST.md), and
-the wiring + measurement geometry are in
+CAD for the **Putting Gate** enclosure — the 3D-printed "bridge" a golf ball rolls
+through. The models live in Onshape (link below); export and print the parts to
+build your own gate. The electronics that mount inside are in
+[`PARTS_LIST.md`](../PARTS_LIST.md), and the wiring + measurement geometry are in
 [`microcontroller/README.md`](../microcontroller/README.md).
 
 ## What lives here
@@ -25,23 +25,10 @@ sensor mounts dimensionally faithful to the source model.
 
 ## Editable source (Onshape)
 
-The editable CAD lives in a public Onshape document — open it to view, measure, or
-remix any part, and export your own STEP/STL if you modify it:
+The CAD lives in a public Onshape document — open it to view, measure, or remix any
+part, then export each part as STL (or STEP) to slice and print:
 
 **<https://cad.onshape.com/documents/c4b592de0452c28abc40e1e5/w/5af483f8f7800af7bf8093f1/e/e14822a6b83e241d4da19292?renderMode=0&uiState=6aa069a619bba4ab0b0437d9>**
-
-## Printable files
-
-Ready-to-slice meshes are in [`stl/`](stl/):
-
-| File                                 | Part                                    |
-| ------------------------------------ | --------------------------------------- |
-| `Putting Gate - gate.stl`            | The bridge body the ball rolls through. |
-| `Putting Gate - Mount.stl`           | Sensor / electronics mount.             |
-| `Putting Gate - Laser.stl`           | Laser module holder.                    |
-| `Putting Gate - Side Cover.stl`      | Side enclosure cover.                   |
-| `Putting Gate - Top Cover Left.stl`  | Left top cover.                         |
-| `Putting Gate - Top Cover Right.stl` | Right top cover.                        |
 
 ## Printing
 
