@@ -104,7 +104,7 @@ export default function Login() {
         >
           <Logo size={44} />
           <div style={{ fontFamily: "var(--font-heading)", fontSize: 26 }}>
-            Putting Gate
+            Open Putt
           </div>
           <div style={{ fontSize: 14, color: "var(--color-neutral-700)" }}>
             {mode === "signin"

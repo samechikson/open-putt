@@ -41,7 +41,7 @@ _BREAK_TYPES = frozenset(
     }
 )
 
-app = FastAPI(title="Putting Gate")
+app = FastAPI(title="Open Putt")
 
 # Allowed browser origins. Defaults cover local dev; set CORS_ALLOW_ORIGINS to a
 # comma-separated list (e.g. the deployed frontend URL) in production.
@@ -341,7 +341,7 @@ async def putters_activate(putter_id: str, uid: str = Depends(require_user)):
 # (AppSettings.backendBaseURL + /api). The routes above stay defined at the root;
 # this outer app is a thin mount. uvicorn serves `application` (see Dockerfile /
 # start.sh).
-application = FastAPI(title="Putting Gate (proxy root)")
+application = FastAPI(title="Open Putt (proxy root)")
 application.mount("/api", app)
 
 

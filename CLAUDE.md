@@ -4,7 +4,7 @@ Guidance for AI assistants working in this repository.
 
 ## What this is
 
-**Putting Gate** is a golf putting-analysis app. A player rolls a putt through a
+**Open Putt** is a golf putting-analysis app. A player rolls a putt through a
 physical "laser gate" (a laser dot defining where the ball crosses); the app
 measures how far off-center the ball crossed and reports a push/pull bias (in mm)
 and speed.

@@ -1,4 +1,4 @@
-# Cached container build for the Putting Gate backend.
+# Cached container build for the Open Putt backend.
 #
 # `gcloud run deploy --source` rebuilds every layer from scratch each time —
 # reinstalling ffmpeg + all pip deps even for a one-line code change. This build

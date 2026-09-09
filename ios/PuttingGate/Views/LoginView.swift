@@ -18,7 +18,7 @@ struct LoginView: View {
 
             VStack(spacing: 10) {
                 PGLogo(size: 52)
-                Text("Putting Gate")
+                Text("Open Putt")
                     .font(.pgHeading(26, relativeTo: .largeTitle))
                     .foregroundStyle(Color.pgText)
                 Text(mode == .signIn ? "Sign in to your account" : "Create an account")

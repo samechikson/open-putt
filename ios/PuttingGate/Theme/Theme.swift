@@ -152,7 +152,7 @@ struct PGTag: View {
     }
 }
 
-/// The Putting Gate mark: a golf "gate" glyph. Drawn to scale from the design's
+/// The Open Putt mark: a golf "gate" glyph. Drawn to scale from the design's
 /// 64×64 SVG so it renders crisp at any size.
 struct PGGlyph: View {
     var barColor: Color = .pgBg

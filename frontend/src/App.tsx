@@ -43,7 +43,7 @@ function App() {
           onClick={() => navigate("/")}
         >
           <Logo size={24} />
-          Putting Gate
+          Open Putt
         </button>
         {user && (
           <>

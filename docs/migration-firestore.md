@@ -1,6 +1,6 @@
 # Migration: Postgres (Supabase) → Firestore
 
-This runbook records the move of the Putting Gate backend's **persistence layer**
+This runbook records the move of the Open Putt backend's **persistence layer**
 off Supabase Postgres onto **Firestore (Native mode)**. Firebase Auth was already
 in place (see `migration-firebase-auth.md`); this change only swaps the database.
 Existing data was disposable test data and was **not** migrated — the Postgres

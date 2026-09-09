@@ -1,4 +1,4 @@
-"""Firestore persistence for the Putting Gate app.
+"""Firestore persistence for the Open Putt app.
 
 This is the *only* database client in the system: the browser and iOS app never
 talk to the DB directly, so every read and write goes through here, and ownership

@@ -1,4 +1,4 @@
-// The Putting Gate mark: two accent gate posts joined by a top bar, with a
+// The Open Putt mark: two accent gate posts joined by a top bar, with a
 // dashed accent-2 laser line across the middle — the physical laser gate the
 // app measures putts through.
 export default function Logo({ size = 24 }: { size?: number }) {

@@ -1,6 +1,6 @@
 # Assembly & Getting Started
 
-How to build a Putting Gate from scratch and roll your first measured putt. It ties
+How to build an Open Putt from scratch and roll your first measured putt. It ties
 together the parts list, the printable enclosure, the firmware, and the apps — each
 of which has its own deeper doc, linked as you go.
 

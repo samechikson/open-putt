@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Provision + deploy the Putting Gate backend on Google Cloud (Cloud Run +
+# Provision + deploy the Open Putt backend on Google Cloud (Cloud Run +
 # Firestore). Run from the repo root after `gcloud auth login`. Idempotent-ish:
 # re-running create steps may error if the resource exists — that's fine, skip
 # and continue.
@@ -104,7 +104,7 @@ create_secret () {  # name value — replaces the latest version
 create_secret CORS_ALLOW_ORIGINS   "$CORS_ORIGIN"
 
 # ---- 5. Runtime service account + IAM --------------------------------------
-gcloud iam service-accounts create "$SA_NAME" --display-name="Putting Gate Cloud Run" || true
+gcloud iam service-accounts create "$SA_NAME" --display-name="Open Putt Cloud Run" || true
 # A newly created service account takes a few seconds to propagate before IAM
 # bindings will accept it; wait until it's resolvable.
 for _ in $(seq 1 20); do

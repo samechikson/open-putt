@@ -1,6 +1,6 @@
-# Setting up your own Putting Gate
+# Setting up your own Open Putt
 
-This guide walks you through running Putting Gate on **your own infrastructure** —
+This guide walks you through running Open Putt on **your own infrastructure** —
 your own Firebase project, your own iOS build, your own hardware gate. The repo
 ships no shared backend; everything is scoped to a Firebase project *you* create,
 so your putts live in your database and nobody else's.

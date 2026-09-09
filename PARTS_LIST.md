@@ -1,6 +1,6 @@
 # Parts List
 
-Physical parts needed to build the **Putting Gate** — the 3D-printed "bridge"
+Physical parts needed to build the **Open Putt** — the 3D-printed "bridge"
 gate a golf ball rolls through, which measures how far offline each putt crosses
 (PUSH/PULL in mm) and its speed, then sends each putt over BLE to the iOS app.
 
