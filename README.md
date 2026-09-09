@@ -19,128 +19,19 @@ This repo has the code and instructions to build a 3D printed golf putting-analy
 
 ---
 
-## Frontend (`frontend/src/`)
+## Getting started
 
-React 19, TypeScript, Vite, Tailwind v4 (`@tailwindcss/vite`), Oxlint. Routing is
-`react-router` in `App.tsx` (`/` dashboard, `/sessions/:id`, `/putters`). It reads and
-writes its own data **directly in Firestore via the Firebase Web SDK** — no backend
-API calls (it never creates sessions/putts, only reads/edits/deletes them and does the
-full putter CRUD).
+- **Build a gate and run it end-to-end** — gather parts, print the enclosure, wire
+  and flash the electronics, and roll your first putt:
+  [`ASSEMBLY.md`](ASSEMBLY.md).
+- **Run the software on your own infrastructure** — your Firebase project, the web +
+  iOS apps, and the optional backend: [`SETUP.md`](SETUP.md).
 
-- `firebaseClient.ts` — Firebase app, `auth`, `db` (Firestore), and `currentUid()`
-  (the signed-in uid that scopes every query); config from build-time `VITE_FIREBASE_*`
-  env (public, safe in the bundle).
-- `sessions.ts` / `putters.ts` — the Firestore data layer (Web SDK reads/writes),
-  single-equality-filter queries + client-side sort (index-free, rule-legal), field
-  shapes mirroring `db.py`. Deletes cascade here (`deleteSession` removes its putts).
-- `analysis.ts` — the golfer-perspective offset/side helpers (`golferSide`, `biasWord`).
-  `golferSide` negates the stored `offset_mm` (pre-inverted on ingest) to recover the
-  golfer's left/right.
-- `AuthContext.tsx` / `Login.tsx` — email/password auth.
-- `Dashboard.tsx`, `SessionDetail.tsx`, `PuttersPage.tsx`, `ContributionGraph.tsx`,
-  `stats.ts` — views and building blocks.
+Each component has a deeper doc: [`microcontroller/README.md`](microcontroller/README.md)
+(hardware wiring, geometry, firmware), [`cad/README.md`](cad/README.md) (the printable
+enclosure), [`backend/db/README.md`](backend/db/README.md) (the Firestore data model),
+and [`CLAUDE.md`](CLAUDE.md) (architecture and conventions).
 
-## iOS (`ios/PuttingGate/`)
-
-SwiftUI, Firebase (`FirebaseCore` / `FirebaseAuth` / `FirebaseFirestore`). Entry point
-`PuttingGateApp.swift` configures Firebase, builds the object graph, and gates the UI
-behind auth. Three tabs: **Gate / History / Settings**.
-
-The app is a **BLE central** that pairs with the hardware gate and writes each putt
-**directly to Firestore** via the Firebase iOS SDK (no backend):
-
-- `Gate/` — `GateConnection` (BLE central; scans for/subscribes to the gate, decodes
-  each `GatePutt`, applies center calibration, and hands it to the service to persist),
-  `GatePutt`, `GateCalibration` + `CalibrationStore` (center-calibration state).
-- `Session/` — `SessionMetadataService` (the **Firestore data layer**: reads
-  sessions/putts/putters, edits metadata, deletes, and `ingest`s gate putts),
-  `SessionConfig` / `SessionConfigStore`, `SessionHistory`, and the `SessionRow` /
-  `SessionPutt` / `Putter` models (built from `DocumentSnapshot`).
-- `Views/` — `GateView`, `HistoryView`, `SessionDetailView`, `SettingsView`,
-  `CalibrationView`, `LoginView`.
-- `Auth/`, `Theme/`, `Resources/` — auth, the warm "Organic" design system, assets.
-
-`GoogleService-Info.plist` is bundled in the target; Firebase products are added via
-Swift Package Manager (`FirebaseFirestore` is wired into `project.pbxproj`).
-
-## Microcontroller (`microcontroller/`)
-
-ESP32 firmware for the physical gate. A golf ball rolls through a 3D-printed bridge; a
-laser marks center and **three VL53L4CD** ToF distance sensors (behind a PCA9548 I2C
-multiplexer, since they share address `0x29`) measure the ball's lateral position as it
-passes. The device computes a per-sensor **push/pull offset** against a jig-measured
-center calibration, plus speed from the sensor spacing.
-
-**Mux → ESP32 wiring.** The PCA9548 connects to the ESP32 over a 4-wire STEMMA QT /
-Qwiic cable, using the standard Qwiic wire colors:
-
-| Mux wire (STEMMA QT) | Signal      | ESP32 pin  |
-| -------------------- | ----------- | ---------- |
-| Red                  | VIN (3.3 V) | **3V3**    |
-| Black                | GND         | **GND**    |
-| Blue                 | SDA         | **GPIO21** |
-| Yellow               | SCL         | **GPIO22** |
-
-(The green laser is wired separately: red + → **GPIO26**, black − → **GND**.) The
-three sensors then hang off the mux on channels 0, 7, 4 (Sensor 1, 2, 3). Full wiring,
-pin rules, and geometry are in [`microcontroller/README.md`](microcontroller/README.md).
-
-Because the ESP32 has no WiFi in the field, it advertises over **BLE as `PuttingGate`**
-and sends each finalized putt as a JSON notification; the iOS app receives it and
-relays it to `POST /api/device/putts` under the signed-in user. The BLE service/
-characteristic UUIDs must match `GateConnection.swift`.
-
-- `putt_tracker/putt_tracker.ino` — the main program (laser, calibrate, detect, report,
-  BLE).
-- `sensors/`, `laser/`, `blink/` — bring-up/debug sketches.
-
-Built with `arduino-cli`; **must** use the `huge_app` partition scheme (BLE overflows
-the default). See [`microcontroller/README.md`](microcontroller/README.md) for wiring,
-the measurement geometry/math, the detection algorithm, the BLE payload, and hard-won
-gotchas.
-
-## Database
-
-**Firestore (Native mode)** — schemaless; the collection model is documented in
-[`backend/db/README.md`](backend/db/README.md). Accessed by the **web and iOS apps**
-directly (Firebase SDK, scoped by `firestore.rules`); the **backend** (Admin SDK,
-bypasses rules) writes only via the legacy ESP32 direct-post path.
-
-- **Collections:** `putters/{uuid}` (user-owned clubs, ≤1 active per user), `sessions/{sessionId}`
-  (one doc per gate session; `sessionId` = the iOS session UUID; fields `length_feet`,
-  `break_type`, `putter_id`, `putt_count`), and a top-level `putts/{sessionId_index}`
-  (one doc per putt, id `"{session_id}_{putt_index}"`, denormalizing `session_id` +
-  `user_id`; deletes cascade in code). Putts carry `offset_mm`, `direction`,
-  `speed_mps`, and `sensor_offsets_mm` (per-sensor readings).
-- iOS creates sessions/putts on ingest; both apps read/edit/delete their own (rules
-  scope everything by `user_id`). Every query filters a single field, so no composite
-  indexes are needed.
-
-**If you change a returned field set, update it in all three places:** `db.py`'s
-`_*_FIELDS`, `backend/db/README.md`, and the frontend TS types (`sessions.ts` /
-`putters.ts` / `analysis.ts`) — and sometimes iOS.
-
-## Backend (`backend/app/`) - DEPRECATED
-
-FastAPI service. Routes are defined on an inner app and mounted at `/api` on the served
-`application`.
-
-| File | Responsibility |
-|------|----------------|
-| `main.py` | FastAPI app: the `POST /device/putts` gate ingest, session/putt reads, session-metadata edit + delete, and putters CRUD. Mounts the API under `/api`. A thin CRUD layer — no analysis. |
-| `db.py` | The backend's Firestore client (Admin SDK; bypasses rules; lazy, fail-soft). Now exercised only by the ESP32 direct-post path; single-field filters + Python-side ordering (no composite indexes). Field lists (`_SESSION_FIELDS`, etc.) stay in sync with the TS/Swift models. See `backend/db/README.md`. |
-| `auth.py` | `require_user` / `require_device` / `require_user_or_device` dependencies → the Firebase UID. In local dev `AUTH_DEV_UID` short-circuits verification. |
-
-**Conventions:** blocking Firestore calls run in a threadpool via `run_in_threadpool`;
-persistence is fail-soft (no Firestore configured → no-op so the app still runs);
-clients are lazy/optional so modules import cleanly with no config; ingest is idempotent
-by `(session_id, putt_index)` — the putt's Firestore doc id is `"{session_id}_{putt_index}"`,
-so the gate can safely retry.
-
-The read / metadata / putter endpoints still exist under `/api`, but **no client
-calls them any more** (both apps use the Firebase SDK directly). The only live
-endpoint is `POST /device/putts` — the legacy ESP32 direct-post ingest (shared
-`X-Device-Token`).
 ---
 
 ## Development
@@ -224,12 +115,6 @@ arduino-cli monitor -p /dev/cu.usbserial-0001 -c baudrate=115200
 > `main` auto-deploys the frontend — be deliberate about what lands there.
 
 ---
-
-## Running your own
-
-Everything is scoped to a Firebase project **you** create — there's no shared
-backend. See [`SETUP.md`](SETUP.md) for the full clone-to-run guide (Firebase
-project, web app, iOS build, hardware, and the optional backend).
 
 ## License
 
