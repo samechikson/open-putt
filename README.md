@@ -9,6 +9,7 @@ This repo has the code and instructions to build a 3D printed golf putting-analy
 | Path | What it is |
 |------|------------|
 | `microcontroller/` | ESP32 (Arduino C++) firmware for the physical laser gate + ToF sensors, and its bring-up sketches. |
+| `cad/` | Renders and print settings for the 3D-printed enclosure; links to the editable CAD in Onshape. |
 | `ios/` | SwiftUI app (`PuttingGate`). Connects to the hardware gate over BLE and writes each putt **directly to Firestore** via the Firebase iOS SDK; shows history/settings. |
 | `frontend/` | React 19 + TypeScript + Vite + Tailwind v4 web app for showing history of putting sessions. Reads/writes Firestore **directly** via the Firebase Web SDK (no backend calls). Served by Firebase Hosting. |
 | `backend/` (optional) | Python / FastAPI service on Google Cloud Run. Now only the legacy ESP32 direct-post ingest path (`POST /api/device/putts`, Admin SDK). |
