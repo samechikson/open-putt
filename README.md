@@ -2,6 +2,8 @@
 
 This repo has the code and instructions to build a 3D printed golf putting-analysis tool to measure a player's putting accuracy and speed.
 
+<img width="640" src="./cad/exploded-view.png" alt="Exploded view of the Open Putt enclosure and components" />
+
 ---
 
 ## Repository layout
