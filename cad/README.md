@@ -2,9 +2,13 @@
 
 **DISCLAIMER**: These files are a work in progress and may change at any time.
 
-<img width="260" src="./model-1.png" alt="Rendered CAD model of the Open Putt enclosure" />
-<img width="260" src="./model-2.png" alt="Rendered CAD model of the Open Putt enclosure" />
-<img width="260" src="./model-3.png" alt="Rendered CAD model of the Open Putt enclosure" />
+<table>
+  <tr>
+    <td><img width="260" src="./model-1.png" alt="Rendered CAD model of the Open Putt enclosure" /></td>
+    <td><img width="260" src="./model-2.png" alt="Rendered CAD model of the Open Putt enclosure" /></td>
+    <td><img width="260" src="./model-3.png" alt="Rendered CAD model of the Open Putt enclosure" /></td>
+  </tr>
+</table>
 
 CAD for the **Open Putt** enclosure — the 3D-printed "bridge" a golf ball rolls
 through. The models live in Onshape (link below); export and print the parts to
