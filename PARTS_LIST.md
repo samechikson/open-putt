@@ -27,6 +27,13 @@ Electronics subtotal: **~$122** (VL53L4CD ×3 = ~$45).
 | 7   | Jumper wires (M–M / M–F) | ~$5            | Laser, power, and I²C tie-ins to the ESP32 header pins.                 |
 | 8   | USB-C cable              | ~$5            | ESP32 ↔ power bank (and ESP32 ↔ Mac for flashing/serial).               |
 
+## Fasteners & mounting
+
+| #   | Part                                                                                                  | Price (approx) | Notes                                                                                         |
+| --- | ----------------------------------------------------------------------------------------------------- | -------------- | --------------------------------------------------------------------------------------------- |
+| 9   | M3 & M4 heat-set threaded inserts + matching screws                                                   | ~$13           | Heat-set into the printed bosses to mount the **ESP32** (M3) and the **battery module** (M4). |
+| 10  | **[Adafruit M2.5 nylon screw & standoff set](https://www.adafruit.com/product/3299)**                 | ~$5            | Mount the Adafruit boards (the **VL53L4CD** sensors and the **PCA9548** mux).                  |
+
 ## Connections (ESP32 pinout)
 
 | From            | To (ESP32) |
