@@ -22,20 +22,17 @@ laser module**, a USB-C power bank, STEMMA QT / Qwiic cables, jumper wires, and
 
 The models live in Onshape; see [`cad/README.md`](cad/README.md) for the link and
 print settings. You'll need a printer with at least a **210 × 210 × 200 mm** build
-volume, **PLA or PETG**, and the M3/M4 heat-set inserts above.
-
-Export each part from Onshape, slice, and print. After printing, **heat-set the
-threaded inserts** into their bosses while the plastic is warm.
+volume, **PLA or PETG**.
 
 ## 3. Mount the electronics
 
+Press the heat set inserts to the top of the print (3mm for the esp32 and top cover, 4mm for the battery module)
+
 Fit the boards and laser into their printed mounts:
 
-- The **3 ToF sensors** sit in a row along the roll direction, facing across the
-  gate. Their alignment is load-bearing for the measurement, so seat them fully and
-  squarely in the printed mount.
+- The **3 ToF sensors** sit on the side panel in a row along the roll direction. The are screwed in using the nylon screws and nuts
 - The **PCA9548 mux** and **ESP32** go in the electronics mount/tray.
-- The **laser** goes in its holder, aimed down the gate's center line.
+- The **laser** goes in its holder, aimed down the gate's center line. Add a 3mm screw to tighten it in place.
 
 ## 4. Wire it up
 
