@@ -6,7 +6,11 @@
   <tr>
     <td><img width="260" src="./model-1.png" alt="Rendered CAD model of the Open Putt enclosure" /></td>
     <td><img width="260" src="./model-2.png" alt="Rendered CAD model of the Open Putt enclosure" /></td>
+    
+  </tr>
+  <tr>
     <td><img width="260" src="./model-3.png" alt="Rendered CAD model of the Open Putt enclosure" /></td>
+    <td><img width="260" src="./exploded-view.png" alt="Rendered CAD model of the Open Putt enclosure" /></td>
   </tr>
 </table>
 
@@ -15,19 +19,6 @@ through. The models live in Onshape (link below); export and print the parts to
 build your own gate. The electronics that mount inside are in
 [`PARTS_LIST.md`](../PARTS_LIST.md), and the wiring + measurement geometry are in
 [`microcontroller/README.md`](../microcontroller/README.md).
-
-## What lives here
-
-The enclosure houses, and holds in fixed alignment:
-
-- **3× VL53L4CD ToF sensors** in a row along the roll direction, facing across the
-  gate (they read the ball's near surface as it passes).
-- The **PCA9548 I²C multiplexer** and the **ESP32** board.
-- The **green laser module**, aimed to mark the gate's center line.
-
-Alignment is load-bearing: the sensors are mounted at a fixed, known geometry and
-each is zeroed with a centering jig (per-sensor `CENTER_READING`), so keep the
-sensor mounts dimensionally faithful to the source model.
 
 ## Editable source (Onshape)
 
